@@ -1,4 +1,4 @@
-# admin_app.py
+# admin.py
 import os, sqlite3
 from datetime import datetime
 from flask import Blueprint, g, request, Response, render_template_string, redirect, url_for
@@ -79,24 +79,31 @@ ADMIN_BASE = """
 </html>
 """
 
+def render_admin(body_template: str, **context):
+    inner = render_template_string(body_template, **context)
+    return render_template_string(ADMIN_BASE, body=inner, now=datetime.utcnow())
+
 @admin_bp.route("/")
 def dashboard():
     db = get_db()
     q_count = db.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
     a_count = db.execute("SELECT COUNT(*) FROM answers").fetchone()[0]
     v_count = db.execute("SELECT COUNT(*) FROM votes").fetchone()[0]
+    suggestions_count = db.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0]
     body = f"""
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
       <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Questions</div><div class="text-3xl font-bold">{q_count}</div></div>
       <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Answers</div><div class="text-3xl font-bold">{a_count}</div></div>
       <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Votes</div><div class="text-3xl font-bold">{v_count}</div></div>
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Suggestions</div><div class="text-3xl font-bold">{suggestions_count}</div></div>
     </div>
     <div class="mt-6 flex gap-2">
       <a href="{url_for('admin.questions')}" class="px-3 py-2 rounded-xl border">Manage Questions</a>
       <a href="{url_for('admin.answers')}" class="px-3 py-2 rounded-xl border">Manage Answers</a>
+      <a href="{url_for('admin.suggestions')}" class="px-3 py-2 rounded-xl border">Manage Suggestions</a>
     </div>
     """
-    return render_template_string(ADMIN_BASE, body=body, now=datetime.utcnow())
+    return render_admin(body)
 
 @admin_bp.route("/questions")
 def questions():
@@ -134,7 +141,7 @@ def questions():
       </table>
     </div>
     """
-    return render_template_string(ADMIN_BASE, body=body, rows=rows, now=datetime.utcnow())
+    return render_admin(body, rows=rows)
 
 @admin_bp.route("/answers")
 def answers():
@@ -172,7 +179,43 @@ def answers():
       </table>
     </div>
     """
-    return render_template_string(ADMIN_BASE, body=body, rows=rows, now=datetime.utcnow())
+    return render_admin(body, rows=rows)
+
+@admin_bp.route("/suggestions")
+def suggestions():
+    db = get_db()
+    rows = db.execute("""
+      SELECT id, body, contact, created_at
+      FROM suggestions
+      ORDER BY id DESC
+      LIMIT 500
+    """).fetchall()
+    body = """
+    <div class="bg-white p-4 rounded-2xl shadow">
+      <h2 class="text-lg font-bold mb-3">Suggestions</h2>
+      <table class="w-full text-sm">
+        <thead><tr class="text-left text-zinc-500">
+          <th class="py-2">ID</th><th>Excerpt</th><th>Contact</th><th>Created</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+          <tr class="border-t">
+            <td class="py-2">{{ r['id'] }}</td>
+            <td class="pr-4">{{ r['body'][:120] }}{% if r['body']|length>120 %}…{% endif %}</td>
+            <td>{{ r['contact'] or '—' }}</td>
+            <td class="text-zinc-500">{{ r['created_at'] }}</td>
+            <td>
+              <form method="post" action="{{ url_for('admin.delete_suggestion', sid=r['id']) }}" style="display:inline" onsubmit="return confirm('Delete this suggestion?');">
+                <button class="text-red-600 ml-2">delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    """
+    return render_admin(body, rows=rows)
 
 # --- destructive actions (POST only) ---
 
@@ -196,3 +239,10 @@ def delete_answer(aid):
         db.commit()
         return redirect(url_for("question", qid=qid))
     return redirect(url_for("admin.answers"))
+
+@admin_bp.route("/delete-suggestion/<int:sid>", methods=["POST"])
+def delete_suggestion(sid):
+    db = get_db()
+    db.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+    db.commit()
+    return redirect(url_for("admin.suggestions"))

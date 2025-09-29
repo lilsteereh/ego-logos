@@ -61,6 +61,15 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_votes_answer ON votes(answer_id);
         CREATE INDEX IF NOT EXISTS idx_votes_question ON votes(question_id);
         CREATE INDEX IF NOT EXISTS idx_votes_q_ip ON votes(question_id, ip_hash);
+
+        -- suggestions sent by users
+        CREATE TABLE IF NOT EXISTS suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            body TEXT NOT NULL,
+            contact TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_suggestions_created ON suggestions(created_at);
         """
     )
     db.commit()
@@ -110,7 +119,10 @@ BASE = """
     <div class="max-w-3xl mx-auto p-4">
       <header class="flex items-center justify-between mb-6">
         <a href="{{ url_for('index') }}" class="text-2xl font-bold">Debate</a>
-        <a href="{{ url_for('ask') }}" class="inline-flex items-center px-3 py-2 rounded-xl bg-zinc-900 text-white hover:bg-zinc-800">Ask a question</a>
+        <div class="flex items-center gap-2">
+          <a href="{{ url_for('ask') }}" class="inline-flex items-center px-3 py-2 rounded-xl bg-zinc-900 text-white hover:bg-zinc-800">Ask a question</a>
+          <a href="{{ url_for('suggest') }}" class="inline-flex items-center px-3 py-2 rounded-xl border border-zinc-300 hover:bg-zinc-50">Suggestions</a>
+        </div>
       </header>
       {{ body|safe }}
       <footer class="mt-12 text-sm text-zinc-500">
@@ -160,6 +172,23 @@ ASK = """
       <textarea name="body" rows="6" class="w-full px-3 py-2 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-300" placeholder="Add context, examples, or constraints…"></textarea>
     </div>
     <button class="px-3 py-2 rounded-2xl bg-zinc-900 text-white">Post question</button>
+  </form>
+</div>
+"""
+
+SUGGEST = """
+<div class="bg-white p-4 rounded-2xl shadow-sm">
+  <h2 class="text-lg font-semibold mb-2">Send a suggestion</h2>
+  <form method="post" class="space-y-3">
+    <div>
+      <label class="block text-sm text-zinc-600">Your suggestion <span class="text-red-600">*</span></label>
+      <textarea name="body" rows="6" required class="w-full px-3 py-2 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-300" placeholder="What should we add or improve?"></textarea>
+    </div>
+    <div>
+      <label class="block text-sm text-zinc-600">Contact (optional)</label>
+      <input name="contact" maxlength="160" class="w-full px-3 py-2 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-300" placeholder="Email, X/IG handle, etc. (optional)" />
+    </div>
+    <button class="px-3 py-2 rounded-xl bg-zinc-900 text-white">Send</button>
   </form>
 </div>
 """
@@ -249,6 +278,27 @@ def ask():
         return redirect(url_for("question", qid=qid))
     body = render_template_string(ASK)
     return render_template_string(BASE, body=body, title="Debate")
+
+@app.route("/suggest", methods=["GET","POST"])
+def suggest():
+    if request.method == "POST":
+        body = (request.form.get("body") or "").strip()
+        contact = (request.form.get("contact") or "").strip()
+        if not body:
+            abort(400, "Suggestion text is required")
+        db = get_db()
+        db.execute("INSERT INTO suggestions(body, contact, created_at) VALUES(?,?,?)", (body, contact, datetime.utcnow()))
+        db.commit()
+        thanks = """
+        <div class="bg-white p-6 rounded-2xl shadow-sm text-center">
+          <h2 class="text-xl font-semibold mb-2">Thank you!</h2>
+          <p class="text-zinc-600">Your suggestion was received.</p>
+          <a href="{{ url_for('index') }}" class="inline-block mt-4 px-3 py-2 rounded-xl border border-zinc-300">Back to home</a>
+        </div>
+        """
+        return render_template_string(BASE, body=thanks, title="Thanks")
+    body = render_template_string(SUGGEST)
+    return render_template_string(BASE, body=body, title="Suggestions")
 
 @app.route("/quick-ask", methods=["POST"])
 def quick_ask():
@@ -355,4 +405,189 @@ if __name__ == "__main__":
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     with app.app_context():
         init_db()
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5001)))
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5001)))import os
+import sqlite3
+from datetime import datetime
+from flask import Blueprint, g, render_template_string, request, redirect, url_for
+
+admin_bp = Blueprint("admin", __name__)
+
+ADMIN_BASE = """
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin</title>
+    <link href="https://cdn.tailwindcss.com" rel="stylesheet" />
+  </head>
+  <body class="bg-zinc-50 text-zinc-900 p-6 max-w-6xl mx-auto">
+    <header class="mb-6">
+      <h1 class="text-3xl font-bold mb-2">Admin</h1>
+      <nav class="flex gap-4 text-sm text-zinc-500">
+        <a href="{{ url_for('admin.dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('admin.questions') }}">Questions</a>
+        <a href="{{ url_for('admin.answers') }}">Answers</a>
+        <a href="{{ url_for('admin.suggestions') }}">Suggestions</a>
+      </nav>
+    </header>
+    {{ body|safe }}
+  </body>
+</html>
+"""
+
+def get_db():
+    if "db" not in g:
+        g.db = sqlite3.connect(os.environ.get("QA_DB_PATH", "qa.sqlite3"), detect_types=sqlite3.PARSE_DECLTYPES)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+def render_admin(body_template: str, **context):
+    inner = render_template_string(body_template, **context)
+    return render_template_string(ADMIN_BASE, body=inner, now=datetime.utcnow())
+
+@admin_bp.route("/")
+def dashboard():
+    db = get_db()
+    q_count = db.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
+    a_count = db.execute("SELECT COUNT(*) FROM answers").fetchone()[0]
+    v_count = db.execute("SELECT COUNT(*) FROM votes").fetchone()[0]
+    body = f"""
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Questions</div><div class="text-3xl font-bold">{q_count}</div></div>
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Answers</div><div class="text-3xl font-bold">{a_count}</div></div>
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Votes</div><div class="text-3xl font-bold">{v_count}</div></div>
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Suggestions</div><div class="text-3xl font-bold">{{{{ suggestions_count }}}}</div></div>
+    </div>
+    <div class="mt-6 flex gap-2">
+      <a href="{{{{ url_for('admin.questions') }}}}" class="px-3 py-2 rounded-xl border">Manage Questions</a>
+      <a href="{{{{ url_for('admin.answers') }}}}" class="px-3 py-2 rounded-xl border">Manage Answers</a>
+      <a href="{{{{ url_for('admin.suggestions') }}}}" class="px-3 py-2 rounded-xl border">Manage Suggestions</a>
+    </div>
+    """
+    suggestions_count = db.execute("SELECT COUNT(*) FROM suggestions").fetchone()[0]
+    return render_admin(body, suggestions_count=suggestions_count)
+
+@admin_bp.route("/questions")
+def questions():
+    db = get_db()
+    rows = db.execute("SELECT id, title, created_at FROM questions ORDER BY id DESC LIMIT 500").fetchall()
+    body = """
+    <div class="bg-white p-4 rounded-2xl shadow">
+      <h2 class="text-lg font-bold mb-3">Questions</h2>
+      <table class="w-full text-sm">
+        <thead><tr class="text-left text-zinc-500">
+          <th class="py-2">ID</th><th>Title</th><th>Created</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+          <tr class="border-t">
+            <td class="py-2">{{ r['id'] }}</td>
+            <td class="pr-4">{{ r['title'][:120] }}{% if r['title']|length>120 %}…{% endif %}</td>
+            <td class="text-zinc-500">{{ r['created_at'] }}</td>
+            <td>
+              <form method="post" action="{{ url_for('admin.delete_question', qid=r['id']) }}" style="display:inline" onsubmit="return confirm('Delete this question?');">
+                <button class="text-red-600 ml-2">delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    """
+    return render_admin(body, rows=rows)
+
+@admin_bp.route("/delete-question/<int:qid>", methods=["POST"])
+def delete_question(qid):
+    db = get_db()
+    db.execute("DELETE FROM questions WHERE id=?", (qid,))
+    db.commit()
+    return redirect(url_for("admin.questions"))
+
+@admin_bp.route("/answers")
+def answers():
+    db = get_db()
+    rows = db.execute("""
+      SELECT a.id, a.body, a.name, a.created_at, q.title AS question_title
+      FROM answers a
+      JOIN questions q ON a.question_id = q.id
+      ORDER BY a.id DESC
+      LIMIT 500
+    """).fetchall()
+    body = """
+    <div class="bg-white p-4 rounded-2xl shadow">
+      <h2 class="text-lg font-bold mb-3">Answers</h2>
+      <table class="w-full text-sm">
+        <thead><tr class="text-left text-zinc-500">
+          <th class="py-2">ID</th><th>Excerpt</th><th>Name</th><th>Question</th><th>Created</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+          <tr class="border-t">
+            <td class="py-2">{{ r['id'] }}</td>
+            <td class="pr-4">{{ r['body'][:120] }}{% if r['body']|length>120 %}…{% endif %}</td>
+            <td>{{ r['name'] or '—' }}</td>
+            <td>{{ r['question_title'] }}</td>
+            <td class="text-zinc-500">{{ r['created_at'] }}</td>
+            <td>
+              <form method="post" action="{{ url_for('admin.delete_answer', aid=r['id']) }}" style="display:inline" onsubmit="return confirm('Delete this answer?');">
+                <button class="text-red-600 ml-2">delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    """
+    return render_admin(body, rows=rows)
+
+@admin_bp.route("/delete-answer/<int:aid>", methods=["POST"])
+def delete_answer(aid):
+    db = get_db()
+    db.execute("DELETE FROM answers WHERE id=?", (aid,))
+    db.commit()
+    return redirect(url_for("admin.answers"))
+
+@admin_bp.route("/suggestions")
+def suggestions():
+    db = get_db()
+    rows = db.execute("""
+      SELECT id, body, contact, created_at
+      FROM suggestions
+      ORDER BY id DESC
+      LIMIT 500
+    """).fetchall()
+    body = """
+    <div class="bg-white p-4 rounded-2xl shadow">
+      <h2 class="text-lg font-bold mb-3">Suggestions</h2>
+      <table class="w-full text-sm">
+        <thead><tr class="text-left text-zinc-500">
+          <th class="py-2">ID</th><th>Excerpt</th><th>Contact</th><th>Created</th><th></th>
+        </tr></thead>
+        <tbody>
+        {% for r in rows %}
+          <tr class="border-t">
+            <td class="py-2">{{ r['id'] }}</td>
+            <td class="pr-4">{{ r['body'][:120] }}{% if r['body']|length>120 %}…{% endif %}</td>
+            <td>{{ r['contact'] or '—' }}</td>
+            <td class="text-zinc-500">{{ r['created_at'] }}</td>
+            <td>
+              <form method="post" action="{{ url_for('admin.delete_suggestion', sid=r['id']) }}" style="display:inline" onsubmit="return confirm('Delete this suggestion?');">
+                <button class="text-red-600 ml-2">delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    """
+    return render_admin(body, rows=rows)
+
+@admin_bp.route("/delete-suggestion/<int:sid>", methods=["POST"])
+def delete_suggestion(sid):
+    db = get_db()
+    db.execute("DELETE FROM suggestions WHERE id=?", (sid,))
+    db.commit()
+    return redirect(url_for("admin.suggestions"))
