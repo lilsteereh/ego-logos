@@ -1,1 +1,8 @@
-app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5001)))
+from flask import Blueprint, g, render_template_string, request, redirect, url_for
+import sqlite3, os
+from datetime import datetime
+
+admin_bp = Blueprint("admin", __name__)
+
+# (…all the admin routes follow…)
+
