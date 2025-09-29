@@ -6,3 +6,6 @@ admin_bp = Blueprint("admin", __name__)
 
 # (…all the admin routes follow…)
 
+@admin_bp.route("/")
+def admin_home():
+    return "Admin panel works"
