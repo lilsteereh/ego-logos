@@ -5,7 +5,7 @@ import uuid, hashlib, hmac
 from flask import Flask, g, render_template_string, request, redirect, url_for, abort, session
 
 # --- Config ---
-DB_PATH = os.environ.get("QA_DB_PATH", "qa.sqlite3")
+DB_PATH = os.environ.get("QA_DB_PATH", "/var/data/qa.sqlite3")
 RAW_SECRET = os.environ.get("FLASK_SECRET")
 SECRET = RAW_SECRET.encode("utf-8") if isinstance(RAW_SECRET, str) else (RAW_SECRET or os.urandom(24))
 
