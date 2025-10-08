@@ -197,7 +197,7 @@ QUESTION = """
 <article class="bg-white p-5 rounded-2xl shadow-sm">
   <h1 class="text-2xl font-bold">{{ q['title'] }}</h1>
   {% if q['body'] %}
-    <div class="prose prose-zinc max-w-none mt-2">{{ q['body'] | e | replace('\\n', '<br>') | safe }}</div>
+    <div class="prose prose-zinc max-w-none mt-2">{{ q['body'].replace('\n', '<br>') | safe }}</div>
   {% endif %}
   <div class="text-xs text-zinc-500 mt-2">Asked {{ q['created_at'] }}</div>
 </article>
@@ -217,7 +217,7 @@ QUESTION = """
         <div class="flex items-start justify-between gap-4">
           <div>
             <div class="text-sm text-zinc-600">by {{ a['name'] or 'Anonymous' }}</div>
-            <div class="mt-1">{{ a['body'] | e | replace('\\n', '<br>') | safe }}</div>
+            <div class="mt-1">{{ a['body'].replace('\n', '<br>') | safe }}</div>
             <div class="text-xs text-zinc-500 mt-2">{{ a['created_at'] }}</div>
           </div>
           <form method="post" action="{{ url_for('vote', qid=q['id'], aid=a['id']) }}">
