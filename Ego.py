@@ -268,7 +268,7 @@ def index():
 def ask():
     if request.method == "POST":
         title = (request.form.get("title") or "").strip()
-        body = (request.form.get("body") or "").strip()
+        body = (request.form.get("body") or "").replace("<br>", "\n").strip()
         if not title:
             abort(400, "Title is required")
         db = get_db()
