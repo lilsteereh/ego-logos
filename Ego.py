@@ -125,6 +125,14 @@ BASE = """
       html, body, input, button, textarea { font-family: 'Lora', serif; }
       .ql-container { min-height: 180px; }
       .prose img { max-width: 100%; height: auto; }
+      /* Make inserted images in Quill editors resizable and responsive */
+      .ql-editor img {
+        max-width: 100%;
+        height: auto;
+        resize: both;
+        overflow: auto;
+        display: inline-block;
+      }
     </style>
   </head>
   <body class="bg-zinc-50 text-zinc-900">
@@ -214,13 +222,13 @@ INDEX = """
   <h1 class="text-xl font-semibold">Questions</h1>
   <form method="get" class="flex items-center gap-2 text-sm">
     <label class="text-zinc-600">Sort by:</label>
-    <select name="sort" onchange="this.form.submit()" class="border border-zinc-300 rounded-xl px-2 py-1">
+    <select name="sort" onchange="this.form.submit()" class="border border-zinc-200 rounded-xl shadow-sm px-3 py-2 bg-white text-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-300 hover:bg-zinc-100 active:bg-zinc-100 transition-all">
       <option value="" {% if sort == '' %}selected{% endif %}>Latest activity</option>
       <option value="recent" {% if sort == 'recent' %}selected{% endif %}>Recently posted</option>
       <option value="bumped" {% if sort == 'bumped' %}selected{% endif %}>Bumped</option>
-      <option value="top_day" {% if sort == 'top_day' %}selected{% endif %}>Top (24h)</option>
-      <option value="top_week" {% if sort == 'top_week' %}selected{% endif %}>Top (7d)</option>
-      <option value="top_month" {% if sort == 'top_month' %}selected{% endif %}>Top (30d)</option>
+      <option value="top_day" {% if sort == 'top_day' %}selected{% endif %}>Top 24h</option>
+      <option value="top_week" {% if sort == 'top_week' %}selected{% endif %}>Top 7d</option>
+      <option value="top_month" {% if sort == 'top_month' %}selected{% endif %}>Top 30d</option>
     </select>
   </form>
 </div>
