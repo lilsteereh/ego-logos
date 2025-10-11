@@ -359,7 +359,7 @@ INDEX = """
             onclick="sendVote(this, '{{ url_for('vote_question', qid=q['id']) }}')"
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 mx-auto">
   <polygon points="10,3 17,17 3,17" />
-</svg>/button>
+</svg></button>
           <div id="{{ qv_count_id }}" class="text-xs mt-1">{{ q['qvotes'] or 0 }}</div>
         </div>
       </div>
@@ -906,6 +906,8 @@ def upload_image():
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
     return send_from_directory(UPLOAD_DIR, filename)
+
+
 
 # --- Entry ---
 if __name__ == "__main__":
