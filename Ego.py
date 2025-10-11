@@ -2,7 +2,7 @@ import os
 import sqlite3
 from datetime import datetime
 import uuid, hashlib, hmac
-from flask import Flask, g, render_template_string, request, redirect, url_for, abort, session, send_from_directory
+from flask import Flask, g, render_template_string, request, redirect, url_for, abort, session, send_from_directory, jsonify
 import bleach
 
 # --- Config ---
@@ -52,6 +52,7 @@ def init_db():
             body TEXT,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
         CREATE TABLE IF NOT EXISTS answers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             question_id INTEGER NOT NULL,
@@ -62,7 +63,8 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_answers_qid ON answers(question_id);
 
-        CREATE TABLE IF NOT EXISTS votes (
+        -- Answer votes: one per question per anon device; toggleable; moving between answers allowed
+        CREATE TABLE IF NOT EXISTS avotes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             question_id INTEGER NOT NULL,
             answer_id INTEGER NOT NULL,
@@ -71,9 +73,18 @@ def init_db():
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(question_id, anon_hash)
         );
-        CREATE INDEX IF NOT EXISTS idx_votes_answer ON votes(answer_id);
-        CREATE INDEX IF NOT EXISTS idx_votes_question ON votes(question_id);
-        CREATE INDEX IF NOT EXISTS idx_votes_q_ip ON votes(question_id, ip_hash);
+        CREATE INDEX IF NOT EXISTS idx_avotes_answer ON avotes(answer_id);
+        CREATE INDEX IF NOT EXISTS idx_avotes_question ON avotes(question_id);
+        CREATE INDEX IF NOT EXISTS idx_avotes_q_ip ON avotes(question_id, ip_hash);
+
+        -- Question votes: one per question per anon device; toggleable
+        CREATE TABLE IF NOT EXISTS qvotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_id INTEGER NOT NULL,
+            anon_hash TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(question_id, anon_hash)
+        );
 
         CREATE TABLE IF NOT EXISTS suggestions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,9 +147,11 @@ BASE = """
         border: 1px dashed transparent;
         transition: border-color 0.15s;
       }
-      .ql-editor img:hover {
-        border: 1px dashed #d1d5db; /* light gray, matches Tailwind zinc-300 */
-      }
+      .ql-editor img:hover { border: 1px dashed #d1d5db; }
+      /* Vote triangle sizing */
+      .vote-tri { font-size: 0.9rem; line-height: 1; }
+      @media (max-width: 640px) { .vote-tri { font-size: 0.95rem; } }
+      .pressed { transform: translateY(1px); }
     </style>
   </head>
   <body class="bg-zinc-50 text-zinc-900">
@@ -152,6 +165,54 @@ BASE = """
       </header>
       {{ body|safe }}
     </div>
+
+    <script>
+      // Generic helper for vote click -> POST -> update
+      async function sendVote(btn, url) {
+        if (btn.dataset.loading === '1') return;
+        btn.dataset.loading = '1';
+        btn.classList.add('pressed');
+
+        try {
+          const res = await fetch(url, { method: 'POST', headers: { 'X-Requested-With': 'fetch' }});
+          const data = await res.json();
+          // Update count & state only after backend confirms
+          if (data && data.ok) {
+            const countEl = document.getElementById(btn.dataset.countId);
+            if (countEl) countEl.textContent = data.count;
+            // toggle active color
+            if (data.voted) {
+              btn.classList.remove('text-zinc-400');
+              btn.classList.add('text-amber-500');
+              btn.setAttribute('aria-pressed', 'true');
+            } else {
+              btn.classList.remove('text-amber-500');
+              btn.classList.add('text-zinc-400');
+              btn.setAttribute('aria-pressed', 'false');
+            }
+
+            // For "one answer per question": backend might return a moved_id to un-highlight old
+            if (data.cleared_answer_id) {
+              const prevBtn = document.querySelector(`[data-aid="${data.cleared_answer_id}"][data-kind="answer"]`);
+              if (prevBtn) {
+                prevBtn.classList.remove('text-amber-500');
+                prevBtn.classList.add('text-zinc-400');
+                prevBtn.setAttribute('aria-pressed', 'false');
+                const prevCount = document.getElementById(prevBtn.dataset.countId);
+                if (prevCount && typeof data.prev_count === 'number') prevCount.textContent = data.prev_count;
+              }
+            }
+          } else {
+            console.warn('Vote failed', data);
+          }
+        } catch (e) {
+          console.error(e);
+        } finally {
+          btn.dataset.loading = '0';
+          btn.classList.remove('pressed');
+        }
+      }
+    </script>
   </body>
 </html>
 """
@@ -241,19 +302,33 @@ INDEX = """
 
 <div class="space-y-4">
   {% for q in questions %}
-    <a href="{{ url_for('question', qid=q['id']) }}" class="block bg-white p-4 rounded-2xl shadow-sm hover:shadow-md transition">
-      <h2 class="text-lg font-semibold">{{ q['title'] }}</h2>
-      {% if q['body'] %}
-        {% set preview = (q['body'] | striptags) %}
-        <p class="text-sm text-zinc-600 mt-1">{{ preview[:180] }}{% if preview|length > 180 %}…{% endif %}</p>
-      {% endif %}
-      <div class="flex justify-between items-center text-xs text-zinc-500 mt-2">
-        <span>{{ q['created_at'] }}</span>
-        {% if q['votes'] is not none %}
-          <span>{{ q['votes'] }} upvotes</span>
-        {% endif %}
+    <div class="bg-white p-4 rounded-2xl shadow-sm hover:shadow-md transition">
+      <div class="flex items-start">
+        <div class="flex-1">
+          <a href="{{ url_for('question', qid=q['id']) }}">
+            <h2 class="text-lg font-semibold">{{ q['title'] }}</h2>
+          </a>
+          {% if q['body'] %}
+            {% set preview = (q['body'] | striptags) %}
+            <p class="text-sm text-zinc-600 mt-1">{{ preview[:180] }}{% if preview|length > 180 %}…{% endif %}</p>
+          {% endif %}
+          <div class="text-xs text-zinc-500 mt-2">{{ q['created_at'] }}</div>
+        </div>
+        <div class="pl-3 text-center">
+          {% set qv_count_id = 'qv-count-' ~ q['id'] %}
+          <button
+            type="button"
+            class="vote-tri transition text-{{ 'amber-500' if q['voted'] else 'zinc-400' }}"
+            aria-pressed="{{ 'true' if q['voted'] else 'false' }}"
+            data-kind="question"
+            data-qid="{{ q['id'] }}"
+            data-count-id="{{ qv_count_id }}"
+            onclick="sendVote(this, '{{ url_for('vote_question', qid=q['id']) }}')"
+          >▲</button>
+          <div id="{{ qv_count_id }}" class="text-xs mt-1">{{ q['qvotes'] or 0 }}</div>
+        </div>
       </div>
-    </a>
+    </div>
   {% else %}
     <p class="text-zinc-600">No questions yet.</p>
   {% endfor %}
@@ -306,11 +381,28 @@ ASK = """
 
 QUESTION = """
 <article class="bg-white p-5 rounded-2xl shadow-sm">
-  <h1 class="text-2xl font-bold">{{ q['title'] }}</h1>
-  {% if q['body'] %}
-    <div class="prose prose-zinc max-w-none mt-2">{{ q['body'] | safe }}</div>
-  {% endif %}
-  <div class="text-xs text-zinc-500 mt-2">Asked {{ q['created_at'] }}</div>
+  <div class="flex items-start">
+    <div class="flex-1">
+      <h1 class="text-2xl font-bold">{{ q['title'] }}</h1>
+      {% if q['body'] %}
+        <div class="prose prose-zinc max-w-none mt-2">{{ q['body'] | safe }}</div>
+      {% endif %}
+      <div class="text-xs text-zinc-500 mt-2">Asked {{ q['created_at'] }}</div>
+    </div>
+    <div class="pl-3 text-center">
+      {% set qv_count_id = 'qv-count-' ~ q['id'] %}
+      <button
+        type="button"
+        class="vote-tri transition text-{{ 'amber-500' if qv_voted else 'zinc-400' }}"
+        aria-pressed="{{ 'true' if qv_voted else 'false' }}"
+        data-kind="question"
+        data-qid="{{ q['id'] }}"
+        data-count-id="{{ qv_count_id }}"
+        onclick="sendVote(this, '{{ url_for('vote_question', qid=q['id']) }}')"
+      >▲</button>
+      <div id="{{ qv_count_id }}" class="text-xs mt-1">{{ qv_count or 0 }}</div>
+    </div>
+  </div>
 </article>
 
 <section class="mt-6">
@@ -318,9 +410,29 @@ QUESTION = """
   <div class="space-y-3">
     {% for a in answers %}
       <div class="bg-white p-4 rounded-2xl shadow-sm">
-        <div class="text-sm text-zinc-600">by {{ a['name'] or 'Anonymous' }}</div>
-        <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
-        <div class="text-xs text-zinc-500 mt-2">{{ a['created_at'] }}</div>
+        <div class="flex items-start">
+          <div class="flex-1">
+            <div class="text-sm text-zinc-600">by {{ a['name'] or 'Anonymous' }}</div>
+            <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
+            <div class="text-xs text-zinc-500 mt-2">{{ a['created_at'] }}</div>
+          </div>
+          <div class="pl-3 text-center">
+            {% set aid = a['id'] %}
+            {% set count_id = 'av-count-' ~ aid %}
+            {% set voted = (current_answer_id == aid) %}
+            <button
+              type="button"
+              class="vote-tri transition text-{{ 'amber-500' if voted else 'zinc-400' }}"
+              aria-pressed="{{ 'true' if voted else 'false' }}"
+              data-kind="answer"
+              data-qid="{{ q['id'] }}"
+              data-aid="{{ aid }}"
+              data-count-id="{{ count_id }}"
+              onclick="sendVote(this, '{{ url_for('vote_answer', qid=q['id'], aid=aid) }}')"
+            >▲</button>
+            <div id="{{ count_id }}" class="text-xs mt-1">{{ vote_counts.get(aid, 0) }}</div>
+          </div>
+        </div>
       </div>
     {% else %}
       <p class="text-zinc-600">No answers yet.</p>
@@ -422,8 +534,9 @@ def index():
     sort = request.args.get("sort", "").strip()
     db = get_db()
 
+    # For each question, we also want current user's question-voted state and total qvotes
+    # Build base lists differently per sort
     if sort in ("", "bumped"):
-        # Default: by latest answer or question
         qs = db.execute("""
             SELECT q.id, q.title, q.body, q.created_at,
                    MAX(COALESCE(a.created_at, q.created_at)) AS activity_time
@@ -436,7 +549,7 @@ def index():
 
     elif sort == "recent":
         qs = db.execute("""
-            SELECT id, title, body, created_at, NULL AS votes
+            SELECT id, title, body, created_at
             FROM questions
             ORDER BY created_at DESC
             LIMIT 50
@@ -444,29 +557,56 @@ def index():
 
     elif sort in ("top_day", "top_week", "top_month"):
         days = {"top_day": 1, "top_week": 7, "top_month": 30}[sort]
+        # Combine qvotes and avotes in timeframe
         qs = db.execute(f"""
             SELECT q.id, q.title, q.body, q.created_at,
-                   COUNT(v.id) AS votes
+                   COALESCE(qv.cnt, 0) + COALESCE(av.cnt, 0) AS votes
             FROM questions q
-            LEFT JOIN answers a ON a.question_id = q.id
-            LEFT JOIN votes v ON v.answer_id = a.id
-              AND v.created_at >= datetime('now', '-{days} day')
-            GROUP BY q.id
+            LEFT JOIN (
+                SELECT question_id, COUNT(*) AS cnt
+                FROM qvotes
+                WHERE created_at >= datetime('now', '-{days} day')
+                GROUP BY question_id
+            ) qv ON qv.question_id = q.id
+            LEFT JOIN (
+                SELECT a.question_id, COUNT(*) AS cnt
+                FROM avotes v
+                JOIN answers a ON a.id = v.answer_id
+                WHERE v.created_at >= datetime('now', '-{days} day')
+                GROUP BY a.question_id
+            ) av ON av.question_id = q.id
             ORDER BY votes DESC, q.created_at DESC
             LIMIT 50
         """).fetchall()
-
     else:
-        # Fallback
         qs = db.execute("""
-            SELECT id, title, body, created_at, NULL AS votes
+            SELECT id, title, body, created_at
             FROM questions
             ORDER BY created_at DESC
             LIMIT 50
         """).fetchall()
 
-    body = render_template_string(INDEX, questions=qs, sort=sort)
-    # inject helpers once on pages that need editors (we add it everywhere; small size)
+    # enrich with vote counts and current user's state
+    anon_hash = make_anon_hash(session.get('anon_id') or "")
+    q_ids = [row['id'] for row in qs]
+    qv_counts = {}
+    qv_voted = set()
+    if q_ids:
+        placeholders = ",".join("?" * len(q_ids))
+        rows = db.execute(f"SELECT question_id, COUNT(*) c FROM qvotes WHERE question_id IN ({placeholders}) GROUP BY question_id", q_ids).fetchall()
+        qv_counts = {r['question_id']: r['c'] for r in rows}
+        rows = db.execute(f"SELECT question_id FROM qvotes WHERE anon_hash=? AND question_id IN ({placeholders})", (anon_hash, *q_ids)).fetchall()
+        qv_voted = {r['question_id'] for r in rows}
+
+    # convert to dicts with extra fields
+    enriched = []
+    for row in qs:
+        d = dict(row)
+        d['qvotes'] = qv_counts.get(row['id'], 0)
+        d['voted'] = (row['id'] in qv_voted)
+        enriched.append(d)
+
+    body = render_template_string(INDEX, questions=enriched, sort=sort)
     return render_template_string(BASE, body=body, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/ask", methods=["GET", "POST"])
@@ -492,7 +632,21 @@ def question(qid):
     if not q:
         abort(404)
     answers = db.execute("SELECT * FROM answers WHERE question_id=?", (qid,)).fetchall()
-    body = render_template_string(QUESTION, q=q, answers=answers, quill_helpers=QUILL_IMAGE_HELPERS)
+
+    # counts for answers
+    rows = db.execute("SELECT answer_id, COUNT(*) AS c FROM avotes WHERE question_id=? GROUP BY answer_id", (qid,)).fetchall()
+    vote_counts = {r['answer_id']: r['c'] for r in rows}
+
+    # current device
+    anon_hash = make_anon_hash(session.get('anon_id') or "")
+    row = db.execute("SELECT answer_id FROM avotes WHERE question_id=? AND anon_hash=?", (qid, anon_hash)).fetchone()
+    current_answer_id = row['answer_id'] if row else None
+
+    # question vote state
+    qv_count = db.execute("SELECT COUNT(*) FROM qvotes WHERE question_id=?", (qid,)).fetchone()[0]
+    qv_voted = db.execute("SELECT 1 FROM qvotes WHERE question_id=? AND anon_hash=?", (qid, anon_hash)).fetchone() is not None
+
+    body = render_template_string(QUESTION, q=q, answers=answers, vote_counts=vote_counts, current_answer_id=current_answer_id, qv_count=qv_count, qv_voted=qv_voted, quill_helpers=QUILL_IMAGE_HELPERS)
     return render_template_string(BASE, body=body, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/q/<int:qid>/answer", methods=["POST"])
@@ -511,6 +665,78 @@ def answer(qid):
     )
     db.commit()
     return redirect(url_for("question", qid=qid))
+
+# --- AJAX Voting ---
+
+@app.route("/q/<int:qid>/vote-question", methods=["POST"])
+def vote_question(qid):
+    db = get_db()
+    if not db.execute("SELECT 1 FROM questions WHERE id=?", (qid,)).fetchone():
+        return jsonify(ok=False, error="not_found"), 404
+
+    anon_hash = make_anon_hash(session.get('anon_id') or "")
+
+    existing = db.execute("SELECT id FROM qvotes WHERE question_id=? AND anon_hash=?", (qid, anon_hash)).fetchone()
+    if existing:
+        db.execute("DELETE FROM qvotes WHERE id=?", (existing['id'],))
+        db.commit()
+        voted = False
+    else:
+        db.execute("INSERT INTO qvotes(question_id, anon_hash, created_at) VALUES(?,?,?)", (qid, anon_hash, datetime.utcnow()))
+        db.commit()
+        voted = True
+
+    count = db.execute("SELECT COUNT(*) FROM qvotes WHERE question_id=?", (qid,)).fetchone()[0]
+    return jsonify(ok=True, voted=voted, count=count)
+
+@app.route("/q/<int:qid>/answer/<int:aid>/vote", methods=["POST"])
+def vote_answer(qid, aid):
+    db = get_db()
+    if not db.execute("SELECT 1 FROM answers WHERE id=? AND question_id=?", (aid, qid)).fetchone():
+        return jsonify(ok=False, error="not_found"), 404
+
+    anon_hash = make_anon_hash(session.get('anon_id') or "")
+    ip_hash = make_ip_hash(client_ip())
+
+    # SOFT CAP: if any other anon from this /24 voted in the last day on this question, show banner (but since this is AJAX, just refuse)
+    recent_other = db.execute("""
+        SELECT 1 FROM avotes
+        WHERE question_id=? AND ip_hash=? AND anon_hash<>? AND created_at >= datetime('now','-1 day')
+        LIMIT 1
+    """, (qid, ip_hash, anon_hash)).fetchone()
+    if recent_other:
+        # Refuse without changing UI; client keeps button state.
+        return jsonify(ok=False, error="ip_cap"), 429
+
+    existing = db.execute("SELECT id, answer_id FROM avotes WHERE question_id=? AND anon_hash=?", (qid, anon_hash)).fetchone()
+
+    cleared_answer_id = None
+    prev_count = None
+
+    if existing:
+        if existing['answer_id'] == aid:
+            # toggle off
+            db.execute("DELETE FROM avotes WHERE id=?", (existing['id'],))
+            db.commit()
+            voted = False
+        else:
+            # move vote to another answer
+            cleared_answer_id = existing['answer_id']
+            # old count after removal
+            db.execute("UPDATE avotes SET answer_id=?, ip_hash=?, created_at=? WHERE id=?", (aid, ip_hash, datetime.utcnow(), existing['id']))
+            db.commit()
+            voted = True
+            # recompute previous answer's count for UI correction
+            prev_count = db.execute("SELECT COUNT(*) FROM avotes WHERE question_id=? AND answer_id=?", (qid, cleared_answer_id)).fetchone()[0]
+    else:
+        db.execute("INSERT INTO avotes(question_id, answer_id, anon_hash, ip_hash, created_at) VALUES(?,?,?,?,?)", (qid, aid, anon_hash, ip_hash, datetime.utcnow()))
+        db.commit()
+        voted = True
+
+    count = db.execute("SELECT COUNT(*) FROM avotes WHERE question_id=? AND answer_id=?", (qid, aid)).fetchone()[0]
+    return jsonify(ok=True, voted=voted, count=count, cleared_answer_id=cleared_answer_id, prev_count=prev_count)
+
+# --- Suggestions ---
 
 @app.route("/suggest", methods=["GET", "POST"])
 def suggest():
@@ -560,7 +786,6 @@ def upload_image():
 
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
-    # Serve from persistent upload directory
     return send_from_directory(UPLOAD_DIR, filename)
 
 # --- Entry ---
