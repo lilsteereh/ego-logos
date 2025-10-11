@@ -449,7 +449,7 @@ QUESTION = """
         <div class="flex items-start">
           <div class="flex-1">
             <div class="text-sm text-zinc-600">by {{ a['name'] or 'Anonymous' }}</div>
-            <div class="answer-body relative max-h-72 overflow-hidden" data-aid="{{ a['id'] }}" data-qid="{{ q['id'] }}">
+            <div class="answer-body relative max-h-[420px] overflow-hidden" data-aid="{{ a['id'] }}" data-qid="{{ q['id'] }}">
   <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
   <div class="expand-overlay hidden absolute bottom-0 left-0 w-full bg-gradient-to-t from-white to-transparent text-center py-2 text-sm text-blue-600 cursor-pointer">View full answer ↓</div>
 </div>
@@ -504,7 +504,8 @@ document.addEventListener('DOMContentLoaded', function () {
   document.querySelectorAll('.answer-body').forEach(el => {
     const content = el.querySelector('.prose');
     const overlay = el.querySelector('.expand-overlay');
-    if (content.scrollHeight > el.clientHeight) {
+    // Use fixed pixel threshold for expand overlay
+    if (content.scrollHeight > 420) {
       overlay.classList.remove('hidden');
       overlay.addEventListener('click', () => {
         el.style.maxHeight = 'none';
