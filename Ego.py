@@ -132,6 +132,7 @@ BASE = """
     <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;600;700&amp;display=swap" rel="stylesheet">
     <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
     <script src="https://cdn.quilljs.com/1.3.7/quill.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quill-image-resize-module@3.0.0/image-resize.min.js"></script>
     <style>
       html, body, input, button, textarea { font-family: 'Lora', serif; }
       .ql-container { min-height: 180px; }
@@ -363,7 +364,10 @@ ASK = """
             ['bold', 'italic', 'underline'],
             [{ 'list': 'ordered' }, { 'list': 'bullet' }],
             ['blockquote', 'image', 'clean']
-          ]
+          ],
+          imageResize: {
+            displaySize: true
+          }
         }
       });
 
@@ -468,7 +472,10 @@ QUESTION = """
             ['bold', 'italic', 'underline'],
             [{ 'list': 'ordered' }, { 'list': 'bullet' }],
             ['blockquote', 'image', 'clean']
-          ]
+          ],
+          imageResize: {
+            displaySize: true
+          }
         }
       });
 
@@ -512,7 +519,10 @@ SUGGEST_FORM = """
             ['bold', 'italic', 'underline'],
             [{ 'list': 'ordered' }, { 'list': 'bullet' }],
             ['blockquote', 'image', 'clean']
-          ]
+          ],
+          imageResize: {
+            displaySize: true
+          }
         }
       });
 
