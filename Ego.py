@@ -853,7 +853,7 @@ def suggest():
     return render_template_string(BASE, body=body_html, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/log_event", methods=["POST"])
-def log_event():
+def log_event_api():
     data = request.get_json(force=True)
     etype = data.get("type")
     path = data.get("path")
