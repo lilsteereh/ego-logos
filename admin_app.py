@@ -1,6 +1,6 @@
 from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory
 import os, sqlite3
-from admin_app import log_event
+
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "devkey")
@@ -12,6 +12,20 @@ def get_db():
         g.db = sqlite3.connect(DATABASE)
         g.db.row_factory = sqlite3.Row
     return g.db
+
+
+def log_event(event_type, path):
+    db = get_db()
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS analytics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT,
+            path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    db.execute("INSERT INTO analytics (event_type, path) VALUES (?, ?)", (event_type, path))
+    db.commit()
 
 def close_db(e=None):
     db = g.pop('db', None)
