@@ -2,7 +2,7 @@ import os
 import sqlite3
 from datetime import datetime
 import uuid, hashlib, hmac
-from flask import Flask, g, render_template_string, request, redirect, url_for, abort, session
+from flask import Flask, g, render_template_string, request, redirect, url_for, abort, session, send_from_directory
 import bleach
 
 # --- Config ---
@@ -11,6 +11,7 @@ RAW_SECRET = os.environ.get("FLASK_SECRET")
 SECRET = RAW_SECRET.encode("utf-8") if isinstance(RAW_SECRET, str) else (RAW_SECRET or os.urandom(24))
 
 ADMIN_PATH = os.environ.get("ADMIN_PATH", "/__debate-admin-92f1c3")
+UPLOAD_DIR = "/var/data/uploads"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = SECRET
@@ -19,9 +20,14 @@ app.config["SECRET_KEY"] = SECRET
 ALLOWED_TAGS = [
     "b", "i", "u", "em", "strong",
     "p", "br", "h1", "h2", "h3", "blockquote",
-    "ul", "ol", "li", "span"
+    "ul", "ol", "li", "span", "img", "div"
 ]
-ALLOWED_ATTRS = {"span": ["style"]}
+ALLOWED_ATTRS = {
+    "span": ["style"],
+    "div": ["style"],
+    "p": ["style"],
+    "img": ["src", "alt", "width", "height", "style"]
+}
 
 # --- DB helpers ---
 def get_db():
@@ -118,6 +124,7 @@ BASE = """
     <style>
       html, body, input, button, textarea { font-family: 'Lora', serif; }
       .ql-container { min-height: 180px; }
+      .prose img { max-width: 100%; height: auto; }
     </style>
   </head>
   <body class="bg-zinc-50 text-zinc-900">
@@ -135,7 +142,89 @@ BASE = """
 </html>
 """
 
+# Shared JS helpers injected where needed (toolbar + drag/drop + paste)
+QUILL_IMAGE_HELPERS = """
+<script>
+  function uploadImageFile(file, quill) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return fetch('/upload_image', { method: 'POST', body: formData })
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.url) {
+          const range = quill.getSelection(true);
+          quill.insertEmbed(range.index, 'image', data.url, 'user');
+          quill.setSelection(range.index + 1);
+        } else {
+          alert('Image upload failed.');
+        }
+      })
+      .catch(() => alert('Image upload failed.'));
+  }
+
+  function attachImageHandlers(quill) {
+    // Toolbar image button
+    const toolbar = quill.getModule('toolbar');
+    if (toolbar) {
+      toolbar.addHandler('image', () => {
+        const input = document.createElement('input');
+        input.setAttribute('type', 'file');
+        input.setAttribute('accept', 'image/*');
+        input.onchange = () => {
+          const file = input.files && input.files[0];
+          if (file) uploadImageFile(file, quill);
+        };
+        input.click();
+      });
+    }
+
+    // Drag & drop
+    quill.root.addEventListener('drop', function(e) {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) {
+          uploadImageFile(file, quill);
+        }
+      }
+    });
+
+    // Paste images from clipboard
+    quill.root.addEventListener('paste', function(e) {
+      const items = (e.clipboardData || window.clipboardData).items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind === 'file') {
+          const file = it.getAsFile();
+          if (file && file.type && file.type.startsWith('image/')) {
+            e.preventDefault();
+            uploadImageFile(file, quill);
+            break;
+          }
+        }
+      }
+    });
+  }
+</script>
+"""
+
 INDEX = """
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-semibold">Questions</h1>
+  <form method="get" class="flex items-center gap-2 text-sm">
+    <label class="text-zinc-600">Sort by:</label>
+    <select name="sort" onchange="this.form.submit()" class="border border-zinc-300 rounded-xl px-2 py-1">
+      <option value="" {% if sort == '' %}selected{% endif %}>Latest activity</option>
+      <option value="recent" {% if sort == 'recent' %}selected{% endif %}>Recently posted</option>
+      <option value="bumped" {% if sort == 'bumped' %}selected{% endif %}>Bumped</option>
+      <option value="top_day" {% if sort == 'top_day' %}selected{% endif %}>Top (24h)</option>
+      <option value="top_week" {% if sort == 'top_week' %}selected{% endif %}>Top (7d)</option>
+      <option value="top_month" {% if sort == 'top_month' %}selected{% endif %}>Top (30d)</option>
+    </select>
+  </form>
+</div>
+
 <div class="space-y-4">
   {% for q in questions %}
     <a href="{{ url_for('question', qid=q['id']) }}" class="block bg-white p-4 rounded-2xl shadow-sm hover:shadow-md transition">
@@ -144,7 +233,12 @@ INDEX = """
         {% set preview = (q['body'] | striptags) %}
         <p class="text-sm text-zinc-600 mt-1">{{ preview[:180] }}{% if preview|length > 180 %}…{% endif %}</p>
       {% endif %}
-      <div class="text-xs text-zinc-500 mt-2">{{ q['created_at'] }}</div>
+      <div class="flex justify-between items-center text-xs text-zinc-500 mt-2">
+        <span>{{ q['created_at'] }}</span>
+        {% if q['votes'] is not none %}
+          <span>{{ q['votes'] }} upvotes</span>
+        {% endif %}
+      </div>
     </a>
   {% else %}
     <p class="text-zinc-600">No questions yet.</p>
@@ -167,6 +261,7 @@ ASK = """
     <button type="submit" class="px-3 py-2 rounded-2xl bg-zinc-900 text-white">Post question</button>
   </form>
 
+  {{ quill_helpers|safe }}
   <script>
     document.addEventListener('DOMContentLoaded', function () {
       var qEditor = new Quill('#q-editor', {
@@ -178,25 +273,23 @@ ASK = """
             [{ 'size': ['small', false, 'large', 'huge'] }],
             ['bold', 'italic', 'underline'],
             [{ 'list': 'ordered' }, { 'list': 'bullet' }],
-            ['blockquote', 'clean']
+            ['blockquote', 'image', 'clean']
           ]
         }
       });
 
-      // Prevent empty posts and always update the hidden input
+      attachImageHandlers(qEditor);
+
       var form = document.getElementById('ask-form');
-      form.addEventListener('submit', function (e) {
+      form.addEventListener('submit', function () {
         var html = qEditor.root.innerHTML.trim();
-        if (html === '<p><br></p>' || html === '') {
-          document.getElementById('q-body').value = '';
-        } else {
-          document.getElementById('q-body').value = html;
-        }
+        document.getElementById('q-body').value = (html === '<p><br></p>' ? '' : html);
       });
     });
   </script>
 </div>
 """
+
 QUESTION = """
 <article class="bg-white p-5 rounded-2xl shadow-sm">
   <h1 class="text-2xl font-bold">{{ q['title'] }}</h1>
@@ -236,6 +329,7 @@ QUESTION = """
     <button type="submit" class="px-3 py-2 rounded-xl bg-zinc-900 text-white">Post answer</button>
   </form>
 
+  {{ quill_helpers|safe }}
   <script>
     document.addEventListener('DOMContentLoaded', function () {
       var aEditor = new Quill('#a-editor', {
@@ -247,31 +341,119 @@ QUESTION = """
             [{ 'size': ['small', false, 'large', 'huge'] }],
             ['bold', 'italic', 'underline'],
             [{ 'list': 'ordered' }, { 'list': 'bullet' }],
-            ['blockquote', 'clean']
+            ['blockquote', 'image', 'clean']
           ]
         }
       });
 
+      attachImageHandlers(aEditor);
+
       var form = document.getElementById('answer-form');
-      form.addEventListener('submit', function (e) {
+      form.addEventListener('submit', function () {
         var html = aEditor.root.innerHTML.trim();
-        if (html === '<p><br></p>' || html === '') {
-          document.getElementById('a-body').value = '';
-        } else {
-          document.getElementById('a-body').value = html;
-        }
+        document.getElementById('a-body').value = (html === '<p><br></p>' ? '' : html);
       });
     });
   </script>
 </section>
 """
+
+SUGGEST_FORM = """
+<div class="bg-white p-5 rounded-2xl shadow-sm">
+  <h1 class="text-2xl font-bold mb-3">Send a Suggestion</h1>
+  <form id="s-form" method="post" class="space-y-3">
+    <div>
+      <label class="block text-sm text-zinc-600">Suggestion <span class="text-red-600">*</span></label>
+      <input type="hidden" name="body" id="s-body">
+      <div id="s-editor" class="bg-white rounded-xl border border-zinc-200"></div>
+    </div>
+    <div>
+      <label class="block text-sm text-zinc-600">Contact (optional)</label>
+      <input name="contact" class="w-full px-3 py-2 rounded-xl border border-zinc-200" />
+    </div>
+    <button class="px-3 py-2 rounded-xl bg-zinc-900 text-white">Submit</button>
+  </form>
+
+  {{ quill_helpers|safe }}
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      var sEditor = new Quill('#s-editor', {
+        theme: 'snow',
+        placeholder: 'Share your feedback or suggestions…',
+        modules: {
+          toolbar: [
+            [{ 'header': [1, 2, 3, false] }],
+            ['bold', 'italic', 'underline'],
+            [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+            ['blockquote', 'image', 'clean']
+          ]
+        }
+      });
+
+      attachImageHandlers(sEditor);
+
+      var sForm = document.getElementById('s-form');
+      sForm.addEventListener('submit', function () {
+        var html = sEditor.root.innerHTML.trim();
+        document.getElementById('s-body').value = (html === '<p><br></p>' ? '' : html);
+      });
+    });
+  </script>
+</div>
+"""
+
 # --- Routes ---
 @app.route("/")
 def index():
+    sort = request.args.get("sort", "").strip()
     db = get_db()
-    qs = db.execute("SELECT id, title, body, created_at FROM questions ORDER BY id DESC LIMIT 50").fetchall()
-    body = render_template_string(INDEX, questions=qs)
-    return render_template_string(BASE, body=body)
+
+    if sort in ("", "bumped"):
+        # Default: by latest answer or question
+        qs = db.execute("""
+            SELECT q.id, q.title, q.body, q.created_at,
+                   MAX(COALESCE(a.created_at, q.created_at)) AS activity_time
+            FROM questions q
+            LEFT JOIN answers a ON a.question_id = q.id
+            GROUP BY q.id
+            ORDER BY activity_time DESC
+            LIMIT 50
+        """).fetchall()
+
+    elif sort == "recent":
+        qs = db.execute("""
+            SELECT id, title, body, created_at, NULL AS votes
+            FROM questions
+            ORDER BY created_at DESC
+            LIMIT 50
+        """).fetchall()
+
+    elif sort in ("top_day", "top_week", "top_month"):
+        days = {"top_day": 1, "top_week": 7, "top_month": 30}[sort]
+        qs = db.execute(f"""
+            SELECT q.id, q.title, q.body, q.created_at,
+                   COUNT(v.id) AS votes
+            FROM questions q
+            LEFT JOIN answers a ON a.question_id = q.id
+            LEFT JOIN votes v ON v.answer_id = a.id
+              AND v.created_at >= datetime('now', '-{days} day')
+            GROUP BY q.id
+            ORDER BY votes DESC, q.created_at DESC
+            LIMIT 50
+        """).fetchall()
+
+    else:
+        # Fallback
+        qs = db.execute("""
+            SELECT id, title, body, created_at, NULL AS votes
+            FROM questions
+            ORDER BY created_at DESC
+            LIMIT 50
+        """).fetchall()
+
+    body = render_template_string(INDEX, questions=qs, sort=sort)
+    # inject helpers once on pages that need editors (we add it everywhere; small size)
+    return render_template_string(BASE, body=body, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/ask", methods=["GET", "POST"])
 def ask():
@@ -286,8 +468,8 @@ def ask():
         db.commit()
         qid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         return redirect(url_for("question", qid=qid))
-    body = render_template_string(ASK)
-    return render_template_string(BASE, body=body)
+    body = render_template_string(ASK, quill_helpers=QUILL_IMAGE_HELPERS)
+    return render_template_string(BASE, body=body, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/q/<int:qid>")
 def question(qid):
@@ -296,8 +478,8 @@ def question(qid):
     if not q:
         abort(404)
     answers = db.execute("SELECT * FROM answers WHERE question_id=?", (qid,)).fetchall()
-    body = render_template_string(QUESTION, q=q, answers=answers)
-    return render_template_string(BASE, body=body)
+    body = render_template_string(QUESTION, q=q, answers=answers, quill_helpers=QUILL_IMAGE_HELPERS)
+    return render_template_string(BASE, body=body, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/q/<int:qid>/answer", methods=["POST"])
 def answer(qid):
@@ -330,44 +512,8 @@ def suggest():
         db.commit()
         return redirect(url_for("index"))
 
-    body_html = """
-    <div class="bg-white p-5 rounded-2xl shadow-sm">
-      <h1 class="text-2xl font-bold mb-3">Send a Suggestion</h1>
-      <form method="post" class="space-y-3">
-        <div>
-          <label class="block text-sm text-zinc-600">Suggestion <span class="text-red-600">*</span></label>
-          <input type="hidden" name="body" id="s-body">
-          <div id="s-editor" class="bg-white rounded-xl border border-zinc-200"></div>
-        </div>
-        <div>
-          <label class="block text-sm text-zinc-600">Contact (optional)</label>
-          <input name="contact" class="w-full px-3 py-2 rounded-xl border border-zinc-200" />
-        </div>
-        <button class="px-3 py-2 rounded-xl bg-zinc-900 text-white">Submit</button>
-      </form>
-      <script>
-        (function () {
-          var sForm = document.currentScript.closest('form');
-          var sEditor = new Quill('#s-editor', {
-            theme: 'snow',
-            placeholder: 'Share your feedback or suggestions…',
-            modules: {
-              toolbar: [
-                [{'header': [1, 2, 3, false]}],
-                ['bold', 'italic', 'underline'],
-                [{'list': 'ordered'}, {'list': 'bullet'}],
-                ['blockquote', 'clean']
-              ]
-            }
-          });
-          sForm.addEventListener('submit', function () {
-            document.getElementById('s-body').value = sEditor.root.innerHTML;
-          });
-        })();
-      </script>
-    </div>
-    """
-    return render_template_string(BASE, body=body_html)
+    body_html = render_template_string(SUGGEST_FORM, quill_helpers=QUILL_IMAGE_HELPERS)
+    return render_template_string(BASE, body=body_html, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/robots.txt")
 def robots():
@@ -376,8 +522,37 @@ def robots():
 from admin_app import admin_bp
 app.register_blueprint(admin_bp, url_prefix=ADMIN_PATH)
 
+# --- Image Uploads ---
+@app.route("/upload_image", methods=["POST"])
+def upload_image():
+    file = request.files.get("file")
+    if not file:
+        return {"error": "No file provided"}, 400
+
+    # Validate extension
+    allowed = {"png", "jpg", "jpeg", "gif", "webp"}
+    if "." not in file.filename:
+        return {"error": "Invalid filename"}, 400
+    ext = file.filename.rsplit(".", 1)[-1].lower()
+    if ext not in allowed:
+        return {"error": "Invalid file type"}, 400
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    path = os.path.join(UPLOAD_DIR, filename)
+    file.save(path)
+
+    return {"url": f"/uploads/{filename}"}
+
+@app.route("/uploads/<path:filename>")
+def serve_upload(filename):
+    # Serve from persistent upload directory
+    return send_from_directory(UPLOAD_DIR, filename)
+
+# --- Entry ---
 if __name__ == "__main__":
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
     with app.app_context():
         init_db()
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5001)))
