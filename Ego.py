@@ -303,6 +303,59 @@ def answer(qid):
     db.commit()
     return redirect(url_for("question", qid=qid))
 
+@app.route("/suggest", methods=["GET", "POST"])
+def suggest():
+    db = get_db()
+    if request.method == "POST":
+        raw_body = (request.form.get("body") or "").strip()
+        contact = (request.form.get("contact") or "").strip()
+        body = bleach.clean(raw_body, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRS, strip=True)
+        if not body:
+            abort(400, "Suggestion text required")
+        db.execute("INSERT INTO suggestions(body, contact, created_at) VALUES(?,?,?)",
+                   (body, contact, datetime.utcnow()))
+        db.commit()
+        return redirect(url_for("index"))
+
+    body_html = """
+    <div class="bg-white p-5 rounded-2xl shadow-sm">
+      <h1 class="text-2xl font-bold mb-3">Send a Suggestion</h1>
+      <form method="post" class="space-y-3">
+        <div>
+          <label class="block text-sm text-zinc-600">Suggestion <span class="text-red-600">*</span></label>
+          <input type="hidden" name="body" id="s-body">
+          <div id="s-editor" class="bg-white rounded-xl border border-zinc-200"></div>
+        </div>
+        <div>
+          <label class="block text-sm text-zinc-600">Contact (optional)</label>
+          <input name="contact" class="w-full px-3 py-2 rounded-xl border border-zinc-200" />
+        </div>
+        <button class="px-3 py-2 rounded-xl bg-zinc-900 text-white">Submit</button>
+      </form>
+      <script>
+        (function () {
+          var sForm = document.currentScript.closest('form');
+          var sEditor = new Quill('#s-editor', {
+            theme: 'snow',
+            placeholder: 'Share your feedback or suggestions…',
+            modules: {
+              toolbar: [
+                [{'header': [1, 2, 3, false]}],
+                ['bold', 'italic', 'underline'],
+                [{'list': 'ordered'}, {'list': 'bullet'}],
+                ['blockquote', 'clean']
+              ]
+            }
+          });
+          sForm.addEventListener('submit', function () {
+            document.getElementById('s-body').value = sEditor.root.innerHTML;
+          });
+        })();
+      </script>
+    </div>
+    """
+    return render_template_string(BASE, body=body_html)
+
 @app.route("/robots.txt")
 def robots():
     return f"User-agent: *\nDisallow: {ADMIN_PATH}\n", 200, {"Content-Type": "text/plain"}
