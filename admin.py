@@ -57,7 +57,6 @@ def gate():
     if not check_auth(request.headers.get("Authorization")):
         return require_auth()
 
-# --- Minimal admin layout ---
 ADMIN_BASE = """
 <!doctype html>
 <html lang="en">
@@ -66,11 +65,24 @@ ADMIN_BASE = """
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Admin · Debate</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;600;700&amp;display=swap" rel="stylesheet">
+    <style>
+      html, body, input, button, textarea { font-family: 'Lora', serif; }
+    </style>
   </head>
   <body class="bg-zinc-50 text-zinc-900">
     <div class="max-w-5xl mx-auto p-4">
       <header class="flex items-center justify-between mb-6">
-        <h1 class="text-2xl font-bold">Admin · Debate</h1>
+        <div class="flex items-center gap-4">
+          <a href="/" class="text-2xl font-bold hover:underline">Debate</a>
+          <nav class="text-sm text-zinc-700">
+            <a class="hover:underline mr-3" href="{{ url_for('admin.dashboard') }}">Dashboard</a>
+            <a class="hover:underline mr-3" href="{{ url_for('admin.questions') }}">Questions</a>
+            <a class="hover:underline mr-3" href="{{ url_for('admin.answers') }}">Answers</a>
+            <a class="hover:underline mr-3" href="{{ url_for('admin.suggestions') }}">Suggestions</a>
+            <a class="hover:underline" href="{{ url_for('admin.analytics') }}">Analytics</a>
+          </nav>
+        </div>
         <div class="text-sm text-zinc-500">{{ now }}</div>
       </header>
       {{ body|safe }}
@@ -83,7 +95,7 @@ def render_admin(body_template: str, **context):
     inner = render_template_string(body_template, **context)
     return render_template_string(ADMIN_BASE, body=inner, now=datetime.utcnow())
 
-@admin_bp.route("/")
+@admin_bp.route("/", endpoint="dashboard")
 def dashboard():
     db = get_db()
     q_count = db.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
@@ -216,6 +228,29 @@ def suggestions():
     </div>
     """
     return render_admin(body, rows=rows)
+
+# --- Analytics route ---
+@admin_bp.route("/analytics")
+def analytics():
+    db = get_db()
+    # Totals
+    q_total = db.execute("SELECT COUNT(*) AS c FROM questions").fetchone()["c"]
+    a_total = db.execute("SELECT COUNT(*) AS c FROM answers").fetchone()["c"]
+    v_total = db.execute("SELECT COUNT(*) AS c FROM votes").fetchone()["c"]
+    s_total = db.execute("SELECT COUNT(*) AS c FROM suggestions").fetchone()["c"]
+    body = """
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Questions</div><div class="text-3xl font-bold">{{ q_total }}</div></div>
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Answers</div><div class="text-3xl font-bold">{{ a_total }}</div></div>
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Votes</div><div class="text-3xl font-bold">{{ v_total }}</div></div>
+      <div class="bg-white p-4 rounded-2xl shadow"><div class="text-sm text-zinc-500">Suggestions</div><div class="text-3xl font-bold">{{ s_total }}</div></div>
+    </div>
+    <div class="bg-white p-4 rounded-2xl shadow">
+      <h2 class="text-lg font-bold mb-3">Activity (last 30 days)</h2>
+      <p class="text-sm text-zinc-600">Detailed charts coming next. For now this page confirms the route works and totals are visible.</p>
+    </div>
+    """
+    return render_admin(body, q_total=q_total, a_total=a_total, v_total=v_total, s_total=s_total)
 
 # --- destructive actions (POST only) ---
 
