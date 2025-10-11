@@ -1,6 +1,15 @@
 from flask import Blueprint, g, render_template_string, request, redirect, url_for, session, abort
 import os, sqlite3
 from datetime import datetime
+import json
+
+def log_event(event_type, path):
+    try:
+        db = get_db()
+        db.execute("INSERT INTO analytics (event_type, path, created_at) VALUES (?,?,?)", (event_type, path, datetime.utcnow()))
+        db.commit()
+    except Exception as e:
+        print(f"Analytics log failed: {e}")
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -26,6 +35,7 @@ BASE = """
           <a class="hover:underline" href="{{ url_for('admin.questions') }}">Questions</a>
           <a class="hover:underline" href="{{ url_for('admin.answers') }}">Answers</a>
           <a class="hover:underline" href="{{ url_for('admin.suggestions') }}">Suggestions</a>
+          <a class="hover:underline" href="{{ url_for('admin.analytics') }}">Analytics</a>
           <a class="hover:underline text-red-600" href="{{ url_for('admin.logout') }}">Logout</a>
         </nav>
         {% endif %}
@@ -165,6 +175,108 @@ def delete_answer(aid):
     db.execute("DELETE FROM answers WHERE id=?", (aid,))
     db.commit()
     return redirect(url_for("admin.answers"))
+
+@admin_bp.route("/analytics")
+def analytics():
+    import json
+    from datetime import date, timedelta
+
+    db = get_db()
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS analytics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            path TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_analytics_type_date ON analytics(event_type, created_at);
+    """)
+    db.commit()
+
+    # --- Parameters ---
+    start = request.args.get("start")
+    end = request.args.get("end")
+    item_id = request.args.get("item_id", "").strip()
+
+    today = date.today()
+    if not start:
+        start = (today - timedelta(days=30)).isoformat()
+    if not end:
+        end = today.isoformat()
+
+    params = [start, end]
+    filter_clause = ""
+    if item_id:
+        if item_id.isdigit():
+            filter_clause = "AND (path LIKE ? OR path LIKE ?)"
+            params.extend([f"/q/{item_id}%", f"/q/%/a/{item_id}%"])
+
+    # --- Aggregate data ---
+    try:
+        rows = db.execute(f"""
+            SELECT date(created_at) AS day,
+                   SUM(CASE WHEN event_type='view' THEN 1 ELSE 0 END) AS views,
+                   SUM(CASE WHEN event_type LIKE 'vote%' THEN 1 ELSE 0 END) AS votes
+            FROM analytics
+            WHERE created_at BETWEEN ? AND ?
+            {filter_clause}
+            GROUP BY day
+            ORDER BY day;
+        """, params).fetchall()
+
+        total_views = db.execute(f"SELECT COUNT(*) FROM analytics WHERE event_type='view' AND created_at BETWEEN ? AND ? {filter_clause}", params).fetchone()[0]
+        total_votes = db.execute(f"SELECT COUNT(*) FROM analytics WHERE event_type LIKE 'vote%' AND created_at BETWEEN ? AND ? {filter_clause}", params).fetchone()[0]
+    except Exception as e:
+        rows, total_views, total_votes = [], 0, 0
+
+    # --- Prepare chart data ---
+    dates = [r["day"] for r in rows]
+    views = [r["views"] for r in rows]
+    votes = [r["votes"] for r in rows]
+
+    html = f"""
+    <div class="bg-white p-6 rounded-2xl shadow-sm">
+      <h1 class="text-2xl font-bold mb-4">Analytics Dashboard</h1>
+
+      <form method="get" class="flex flex-wrap gap-2 mb-6">
+        <input type="date" name="start" value="{start}" class="border rounded px-2 py-1">
+        <input type="date" name="end" value="{end}" class="border rounded px-2 py-1">
+        <input type="text" name="item_id" value="{item_id}" placeholder="Question/Answer ID" class="border rounded px-2 py-1" />
+        <button class="px-3 py-1 bg-zinc-900 text-white rounded-xl">Filter</button>
+      </form>
+
+      <div class="grid grid-cols-2 gap-4 mb-4">
+        <div class="p-3 bg-zinc-100 rounded-lg text-center">
+          <div class="text-sm text-zinc-600">Total Views</div>
+          <div class="text-xl font-semibold">{total_views}</div>
+        </div>
+        <div class="p-3 bg-zinc-100 rounded-lg text-center">
+          <div class="text-sm text-zinc-600">Total Votes</div>
+          <div class="text-xl font-semibold">{total_votes}</div>
+        </div>
+      </div>
+
+      <canvas id="analyticsChart" height="120"></canvas>
+      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+      <script>
+        const ctx = document.getElementById('analyticsChart');
+        new Chart(ctx, {{
+          type: 'line',
+          data: {{
+            labels: {json.dumps(dates)},
+            datasets: [
+              {{ label: 'Views', data: {json.dumps(views)}, borderColor: '#f59e0b', fill: false }},
+              {{ label: 'Votes', data: {json.dumps(votes)}, borderColor: '#3b82f6', fill: false }}
+            ]
+          }},
+          options: {{ scales: {{ y: {{ beginAtZero: true }} }} }}
+        }});
+      </script>
+    </div>
+    """
+
+    return render_template_string(BASE, body=html)
 
 # ---------- Login form ----------
 LOGIN_FORM = """

@@ -92,9 +92,32 @@ def init_db():
             contact TEXT,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS analytics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            path TEXT,
+            ip_hash TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_analytics_event_time ON analytics(event_type, created_at);
         """
     )
     db.commit()
+
+# --- Analytics Helper ---
+def log_event(event_type, path):
+    try:
+        db = get_db()
+        ip = client_ip()
+        iphash = make_ip_hash(ip)
+        db.execute(
+            "INSERT INTO analytics(event_type, path, ip_hash, created_at) VALUES (?, ?, ?, ?)",
+            (event_type, path, iphash, datetime.utcnow()),
+        )
+        db.commit()
+    except Exception:
+        pass  # Never break the site on analytics failure
 
 @app.before_request
 def ensure_db():
@@ -541,6 +564,7 @@ SUGGEST_FORM = """
 # --- Routes ---
 @app.route("/")
 def index():
+    log_event("view", request.path)
     sort = request.args.get("sort", "").strip()
     db = get_db()
 
@@ -632,11 +656,13 @@ def ask():
         db.commit()
         qid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         return redirect(url_for("question", qid=qid))
+    log_event("view", request.path)
     body = render_template_string(ASK, quill_helpers=QUILL_IMAGE_HELPERS)
     return render_template_string(BASE, body=body, quill_helpers=QUILL_IMAGE_HELPERS)
 
 @app.route("/q/<int:qid>")
 def question(qid):
+    log_event("view", request.path)
     db = get_db()
     q = db.execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone()
     if not q:
@@ -680,6 +706,7 @@ def answer(qid):
 
 @app.route("/q/<int:qid>/vote-question", methods=["POST"])
 def vote_question(qid):
+    log_event("vote_question", f"/q/{qid}")
     db = get_db()
     if not db.execute("SELECT 1 FROM questions WHERE id=?", (qid,)).fetchone():
         return jsonify(ok=False, error="not_found"), 404
@@ -701,6 +728,7 @@ def vote_question(qid):
 
 @app.route("/q/<int:qid>/answer/<int:aid>/vote", methods=["POST"])
 def vote_answer(qid, aid):
+    log_event("vote_answer", f"/q/{qid}/a/{aid}")
     db = get_db()
     if not db.execute("SELECT 1 FROM answers WHERE id=? AND question_id=?", (aid, qid)).fetchone():
         return jsonify(ok=False, error="not_found"), 404
@@ -762,6 +790,7 @@ def suggest():
         db.commit()
         return redirect(url_for("index"))
 
+    log_event("view", request.path)
     body_html = render_template_string(SUGGEST_FORM, quill_helpers=QUILL_IMAGE_HELPERS)
     return render_template_string(BASE, body=body_html, quill_helpers=QUILL_IMAGE_HELPERS)
 
