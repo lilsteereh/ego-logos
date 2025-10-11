@@ -451,7 +451,7 @@ QUESTION = """
             <div class="text-sm text-zinc-600">by {{ a['name'] or 'Anonymous' }}</div>
             <div class="answer-body relative max-h-[420px] overflow-hidden" data-aid="{{ a['id'] }}" data-qid="{{ q['id'] }}">
   <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
-  <div class="expand-overlay hidden absolute bottom-0 left-0 w-full bg-gradient-to-t from-white to-transparent text-center py-2 text-sm text-blue-600 cursor-pointer">View full answer ↓</div>
+  <div class="expand-overlay hidden absolute bottom-0 left-0 w-full bg-gradient-to-t from-white/95 to-transparent text-center py-3 text-base font-semibold text-blue-700 cursor-pointer backdrop-blur-sm shadow-inner hover:text-blue-800 transition">View full answer ↓</div>
 </div>
             <div class="text-xs text-zinc-500 mt-2">{{ a['created_at'] }}</div>
           </div>
