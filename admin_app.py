@@ -33,7 +33,7 @@ def close_db(e=None):
     if db is not None:
         db.close()
 
-admin_bp.teardown_appcontext(close_db)
+admin_bp.teardown_app_request(close_db)
 
 def init_db():
     db = get_db()
