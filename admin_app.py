@@ -183,16 +183,23 @@ def analytics():
 
     db = get_db()
 
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS analytics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            path TEXT,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_analytics_type_date ON analytics(event_type, created_at);
-    """)
-    db.commit()
+    # --- Ensure analytics table exists ---
+    try:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS analytics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                path TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_analytics_type_date 
+            ON analytics(event_type, created_at)
+        """)
+        db.commit()
+    except Exception as e:
+        print("Analytics table creation error:", e)
 
     # --- Parameters ---
     start = request.args.get("start")
