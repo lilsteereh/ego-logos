@@ -154,42 +154,49 @@ INDEX = """
 
 ASK = """
 <div class="bg-white p-4 rounded-2xl shadow-sm">
-  <form method="post" class="space-y-3">
+  <form id="ask-form" method="post" class="space-y-3">
     <div>
       <label class="block text-sm text-zinc-600">Title <span class="text-red-600">*</span></label>
       <input name="title" required maxlength="180" class="w-full px-3 py-2 rounded-xl border border-zinc-200" />
     </div>
     <div>
       <label class="block text-sm text-zinc-600">Details (optional)</label>
-      <input type="hidden" name="body" id="q-body">
+      <input type="hidden" name="body" id="q-body" />
       <div id="q-editor" class="bg-white rounded-xl border border-zinc-200"></div>
     </div>
-    <button class="px-3 py-2 rounded-2xl bg-zinc-900 text-white">Post question</button>
+    <button type="submit" class="px-3 py-2 rounded-2xl bg-zinc-900 text-white">Post question</button>
   </form>
+
   <script>
-    (function () {
-      var qForm = document.currentScript.closest('form');
+    document.addEventListener('DOMContentLoaded', function () {
       var qEditor = new Quill('#q-editor', {
         theme: 'snow',
         placeholder: 'Add context, examples, or constraints…',
         modules: {
           toolbar: [
-            [{'header': [1, 2, 3, false]}],
-            [{'size': ['small', false, 'large', 'huge']}],
+            [{ 'header': [1, 2, 3, false] }],
+            [{ 'size': ['small', false, 'large', 'huge'] }],
             ['bold', 'italic', 'underline'],
-            [{'list': 'ordered'}, {'list': 'bullet'}],
+            [{ 'list': 'ordered' }, { 'list': 'bullet' }],
             ['blockquote', 'clean']
           ]
         }
       });
-      qForm.addEventListener('submit', function () {
-        document.getElementById('q-body').value = qEditor.root.innerHTML;
+
+      // Prevent empty posts and always update the hidden input
+      var form = document.getElementById('ask-form');
+      form.addEventListener('submit', function (e) {
+        var html = qEditor.root.innerHTML.trim();
+        if (html === '<p><br></p>' || html === '') {
+          document.getElementById('q-body').value = '';
+        } else {
+          document.getElementById('q-body').value = html;
+        }
       });
-    })();
+    });
   </script>
 </div>
 """
-
 QUESTION = """
 <article class="bg-white p-5 rounded-2xl shadow-sm">
   <h1 class="text-2xl font-bold">{{ q['title'] }}</h1>
