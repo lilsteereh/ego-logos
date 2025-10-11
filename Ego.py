@@ -357,7 +357,9 @@ INDEX = """
             data-qid="{{ q['id'] }}"
             data-count-id="{{ qv_count_id }}"
             onclick="sendVote(this, '{{ url_for('vote_question', qid=q['id']) }}')"
-          >▲</button>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 mx-auto">
+  <polygon points="10,3 17,17 3,17" />
+</svg>/button>
           <div id="{{ qv_count_id }}" class="text-xs mt-1">{{ q['qvotes'] or 0 }}</div>
         </div>
       </div>
@@ -452,9 +454,9 @@ QUESTION = """
             <div class="answer-body relative max-h-[420px] overflow-hidden" data-aid="{{ a['id'] }}" data-qid="{{ q['id'] }}">
   <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
   <div class="expand-overlay hidden absolute bottom-0 left-0 w-full flex justify-center pb-3">
-    <div class="px-4 py-1.5 rounded-full bg-white/80 backdrop-blur-[2px] text-sm font-medium text-zinc-700 hover:text-zinc-900 border border-zinc-200 shadow-sm transition">
-      View full answer ↓
-    </div>
+    <div class="px-4 py-1.5 rounded-full bg-amber-50/90 backdrop-blur-[2px] text-sm font-semibold text-amber-600 hover:bg-amber-100 border border-amber-200 shadow-sm transition">
+  View full answer ↓
+</div>
   </div>
 </div>
             <div class="text-xs text-zinc-500 mt-2">{{ a['created_at'] }}</div>
