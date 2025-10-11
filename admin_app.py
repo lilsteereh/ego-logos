@@ -186,114 +186,234 @@ def answers():
 @admin_bp.route("/analytics")
 def analytics():
     """
-    Filters: ?type=view|vote_question|vote_answer, ?qid=, ?aid=, ?start=YYYY-MM-DD, ?end=YYYY-MM-DD
-    Shows daily counts and a small line chart.
+    Shows three analytics sections:
+      1. Feed views (event_type='feed_view')
+      2. Question views (event_type='view'), filterable by question ID
+      3. Answer views (event_type='view_answer'), filterable by answer ID
+    Each with its own date range and filter form, summary, and Chart.js chart.
     """
     db = get_db()
 
-    etype = (request.args.get("type") or "").strip()
-    qid = request.args.get("qid", type=int)
-    aid = request.args.get("aid", type=int)
-    start = (request.args.get("start") or "").strip()
-    end = (request.args.get("end") or "").strip()
-
-    where = []
-    params = []
-    if etype:
-        where.append("event_type = ?")
-        params.append(etype)
-    if qid:
-        where.append(" (path = ? OR path LIKE ?) ")
-        params.extend((f"/q/{qid}", f"/q/{qid}/%"))
-    if aid:
-        where.append(" (path LIKE ?) ")
-        params.append(f"%/a/{aid}%")
-    if start:
-        where.append(" date(created_at) >= date(?) ")
-        params.append(start)
-    if end:
-        where.append(" date(created_at) <= date(?) ")
-        params.append(end)
-
-    where_sql = "WHERE " + " AND ".join(where) if where else ""
-
-    rows = db.execute(f"""
+    # Feed views filters
+    feed_start = (request.args.get("feed_start") or "").strip()
+    feed_end = (request.args.get("feed_end") or "").strip()
+    feed_where = ["event_type = 'feed_view'"]
+    feed_params = []
+    if feed_start:
+        feed_where.append("date(created_at) >= date(?)")
+        feed_params.append(feed_start)
+    if feed_end:
+        feed_where.append("date(created_at) <= date(?)")
+        feed_params.append(feed_end)
+    feed_where_sql = "WHERE " + " AND ".join(feed_where)
+    feed_rows = db.execute(f"""
         SELECT date(created_at) AS d, COUNT(*) AS c
         FROM analytics
-        {where_sql}
+        {feed_where_sql}
         GROUP BY date(created_at)
         ORDER BY d ASC
-    """, params).fetchall()
+    """, feed_params).fetchall()
+    feed_total = sum(r["c"] for r in feed_rows)
+    feed_labels = [r["d"] for r in feed_rows]
+    feed_values = [r["c"] for r in feed_rows]
 
-    total = sum(r["c"] for r in rows)
-    labels = [r["d"] for r in rows]
-    values = [r["c"] for r in rows]
+    # Question views filters
+    q_start = (request.args.get("q_start") or "").strip()
+    q_end = (request.args.get("q_end") or "").strip()
+    qid = request.args.get("q_qid", type=int)
+    q_where = ["event_type = 'view'"]
+    q_params = []
+    if qid:
+        q_where.append("(path = ? OR path LIKE ?)")
+        q_params.extend((f"/q/{qid}", f"/q/{qid}/%"))
+    if q_start:
+        q_where.append("date(created_at) >= date(?)")
+        q_params.append(q_start)
+    if q_end:
+        q_where.append("date(created_at) <= date(?)")
+        q_params.append(q_end)
+    q_where_sql = "WHERE " + " AND ".join(q_where)
+    q_rows = db.execute(f"""
+        SELECT date(created_at) AS d, COUNT(*) AS c
+        FROM analytics
+        {q_where_sql}
+        GROUP BY date(created_at)
+        ORDER BY d ASC
+    """, q_params).fetchall()
+    q_total = sum(r["c"] for r in q_rows)
+    q_labels = [r["d"] for r in q_rows]
+    q_values = [r["c"] for r in q_rows]
+
+    # Answer views filters
+    a_start = (request.args.get("a_start") or "").strip()
+    a_end = (request.args.get("a_end") or "").strip()
+    aid = request.args.get("a_aid", type=int)
+    a_where = ["event_type = 'view_answer'"]
+    a_params = []
+    if aid:
+        a_where.append("(path LIKE ?)")
+        a_params.append(f"%/a/{aid}%")
+    if a_start:
+        a_where.append("date(created_at) >= date(?)")
+        a_params.append(a_start)
+    if a_end:
+        a_where.append("date(created_at) <= date(?)")
+        a_params.append(a_end)
+    a_where_sql = "WHERE " + " AND ".join(a_where)
+    a_rows = db.execute(f"""
+        SELECT date(created_at) AS d, COUNT(*) AS c
+        FROM analytics
+        {a_where_sql}
+        GROUP BY date(created_at)
+        ORDER BY d ASC
+    """, a_params).fetchall()
+    a_total = sum(r["c"] for r in a_rows)
+    a_labels = [r["d"] for r in a_rows]
+    a_values = [r["c"] for r in a_rows]
 
     body = render_template_string("""
-      <div class="card space-y-4">
-        <h2 class="text-xl font-semibold">Analytics</h2>
+      <div class="card space-y-8">
+        <h2 class="text-xl font-semibold mb-2">Analytics</h2>
 
-        <form class="grid md:grid-cols-6 gap-3" method="get">
-          <div>
-            <label class="block text-xs text-zinc-500 mb-1">Type</label>
-            <select name="type" class="border rounded px-2 py-1 w-full">
-              <option value="" {{ 'selected' if (type or '') == '' else '' }}>(all)</option>
-              <option value="view" {{ 'selected' if type == 'view' else '' }}>view</option>
-              <option value="vote_question" {{ 'selected' if type == 'vote_question' else '' }}>vote_question</option>
-              <option value="vote_answer" {{ 'selected' if type == 'vote_answer' else '' }}>vote_answer</option>
-            </select>
+        <!-- Feed Views Section -->
+        <section>
+          <h3 class="text-lg font-semibold mb-2">Feed Views</h3>
+          <form class="flex flex-wrap gap-4 mb-2" method="get">
+            <input type="hidden" name="section" value="feed">
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">Start (YYYY-MM-DD)</label>
+              <input name="feed_start" value="{{ feed_start or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">End (YYYY-MM-DD)</label>
+              <input name="feed_end" value="{{ feed_end or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div class="flex items-end">
+              <button class="px-3 py-2 rounded bg-zinc-900 text-white">Apply</button>
+            </div>
+          </form>
+          <div class="text-sm text-zinc-600 mb-2">
+            Total feed views: <span class="font-semibold text-zinc-900">{{ feed_total }}</span>
           </div>
-          <div>
-            <label class="block text-xs text-zinc-500 mb-1">Question ID</label>
-            <input name="qid" value="{{ qid or '' }}" class="border rounded px-2 py-1 w-full" />
+          <div class="bg-white rounded p-3 mb-2" style="height:220px;">
+            <canvas id="feed_chart"></canvas>
           </div>
-          <div>
-            <label class="block text-xs text-zinc-500 mb-1">Answer ID</label>
-            <input name="aid" value="{{ aid or '' }}" class="border rounded px-2 py-1 w-full" />
-          </div>
-          <div>
-            <label class="block text-xs text-zinc-500 mb-1">Start (YYYY-MM-DD)</label>
-            <input name="start" value="{{ start or '' }}" class="border rounded px-2 py-1 w-full" />
-          </div>
-          <div>
-            <label class="block text-xs text-zinc-500 mb-1">End (YYYY-MM-DD)</label>
-            <input name="end" value="{{ end or '' }}" class="border rounded px-2 py-1 w-full" />
-          </div>
-          <div class="flex items-end">
-            <button class="px-3 py-2 rounded bg-zinc-900 text-white">Apply</button>
-          </div>
-        </form>
+          <table class="mt-2">
+            <thead><tr><th>Date</th><th>Count</th></tr></thead>
+            <tbody>
+              {% for r in feed_rows %}
+                <tr><td>{{ r['d'] }}</td><td>{{ r['c'] }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
 
-        <div class="text-sm text-zinc-600">
-          Total events: <span class="font-semibold text-zinc-900">{{ total }}</span>
-        </div>
+        <!-- Question Views Section -->
+        <section>
+          <h3 class="text-lg font-semibold mb-2">Question Views</h3>
+          <form class="flex flex-wrap gap-4 mb-2" method="get">
+            <input type="hidden" name="section" value="question">
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">Question ID</label>
+              <input name="q_qid" value="{{ qid or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">Start (YYYY-MM-DD)</label>
+              <input name="q_start" value="{{ q_start or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">End (YYYY-MM-DD)</label>
+              <input name="q_end" value="{{ q_end or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div class="flex items-end">
+              <button class="px-3 py-2 rounded bg-zinc-900 text-white">Apply</button>
+            </div>
+          </form>
+          <div class="text-sm text-zinc-600 mb-2">
+            Total question views: <span class="font-semibold text-zinc-900">{{ q_total }}</span>
+          </div>
+          <div class="bg-white rounded p-3 mb-2" style="height:220px;">
+            <canvas id="q_chart"></canvas>
+          </div>
+          <table class="mt-2">
+            <thead><tr><th>Date</th><th>Count</th></tr></thead>
+            <tbody>
+              {% for r in q_rows %}
+                <tr><td>{{ r['d'] }}</td><td>{{ r['c'] }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
 
-        <div class="bg-white rounded p-3" style="height:260px;">
-          <canvas id="chart"></canvas>
-        </div>
+        <!-- Answer Views Section -->
+        <section>
+          <h3 class="text-lg font-semibold mb-2">Answer Views</h3>
+          <form class="flex flex-wrap gap-4 mb-2" method="get">
+            <input type="hidden" name="section" value="answer">
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">Answer ID</label>
+              <input name="a_aid" value="{{ aid or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">Start (YYYY-MM-DD)</label>
+              <input name="a_start" value="{{ a_start or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-500 mb-1">End (YYYY-MM-DD)</label>
+              <input name="a_end" value="{{ a_end or '' }}" class="border rounded px-2 py-1 w-full" />
+            </div>
+            <div class="flex items-end">
+              <button class="px-3 py-2 rounded bg-zinc-900 text-white">Apply</button>
+            </div>
+          </form>
+          <div class="text-sm text-zinc-600 mb-2">
+            Total answer views: <span class="font-semibold text-zinc-900">{{ a_total }}</span>
+          </div>
+          <div class="bg-white rounded p-3 mb-2" style="height:220px;">
+            <canvas id="a_chart"></canvas>
+          </div>
+          <table class="mt-2">
+            <thead><tr><th>Date</th><th>Count</th></tr></thead>
+            <tbody>
+              {% for r in a_rows %}
+                <tr><td>{{ r['d'] }}</td><td>{{ r['c'] }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
 
-        <table class="mt-4">
-          <thead><tr><th>Date</th><th>Count</th></tr></thead>
-          <tbody>
-            {% for r in rows %}
-              <tr><td>{{ r['d'] }}</td><td>{{ r['c'] }}</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
       </div>
-
       <script>
-        const labels = {{ labels|tojson }};
-        const values = {{ values|tojson }};
-        new Chart(document.getElementById('chart'), {
+        // Feed chart
+        new Chart(document.getElementById('feed_chart'), {
           type: 'line',
           data: {
-            labels: labels,
-            datasets: [{ label: 'Events', data: values, borderWidth: 2, fill: false }]
+            labels: {{ feed_labels|tojson }},
+            datasets: [{ label: 'Feed Views', data: {{ feed_values|tojson }}, borderWidth: 2, fill: false, borderColor:'#2563eb', backgroundColor:'#2563eb' }]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+        // Question chart
+        new Chart(document.getElementById('q_chart'), {
+          type: 'line',
+          data: {
+            labels: {{ q_labels|tojson }},
+            datasets: [{ label: 'Question Views', data: {{ q_values|tojson }}, borderWidth: 2, fill: false, borderColor:'#059669', backgroundColor:'#059669' }]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+        // Answer chart
+        new Chart(document.getElementById('a_chart'), {
+          type: 'line',
+          data: {
+            labels: {{ a_labels|tojson }},
+            datasets: [{ label: 'Answer Views', data: {{ a_values|tojson }}, borderWidth: 2, fill: false, borderColor:'#eab308', backgroundColor:'#eab308' }]
           },
           options: { responsive: true, maintainAspectRatio: false }
         });
       </script>
-    """, rows=rows, labels=labels, values=values, total=total,
-         type=etype, qid=qid, aid=aid, start=start, end=end)
+    """,
+    feed_rows=feed_rows, feed_labels=feed_labels, feed_values=feed_values, feed_total=feed_total, feed_start=feed_start, feed_end=feed_end,
+    q_rows=q_rows, q_labels=q_labels, q_values=q_values, q_total=q_total, qid=qid, q_start=q_start, q_end=q_end,
+    a_rows=a_rows, a_labels=a_labels, a_values=a_values, a_total=a_total, aid=aid, a_start=a_start, a_end=a_end)
     return render_template_string(ADMIN_BASE, body=body)
