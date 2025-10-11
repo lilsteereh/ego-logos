@@ -212,7 +212,7 @@ QUESTION = """
     {% for a in answers %}
       <div class="bg-white p-4 rounded-2xl shadow-sm">
         <div class="text-sm text-zinc-600">by {{ a['name'] or 'Anonymous' }}</div>
-        <div class="mt-1">{{ a['body'] | safe }}</div>
+        <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
         <div class="text-xs text-zinc-500 mt-2">{{ a['created_at'] }}</div>
       </div>
     {% else %}
@@ -223,42 +223,48 @@ QUESTION = """
 
 <section class="mt-6 bg-white p-4 rounded-2xl shadow-sm">
   <h3 class="font-semibold">Add your answer</h3>
-  <form method="post" action="{{ url_for('answer', qid=q['id']) }}" class="space-y-3">
+  <form id="answer-form" method="post" action="{{ url_for('answer', qid=q['id']) }}" class="space-y-3">
     <div>
       <label class="block text-sm text-zinc-600">Display name (optional)</label>
       <input name="name" maxlength="80" class="w-full px-3 py-2 rounded-xl border border-zinc-200" />
     </div>
     <div>
       <label class="block text-sm text-zinc-600">Your answer <span class="text-red-600">*</span></label>
-      <input type="hidden" name="body" id="a-body">
+      <input type="hidden" name="body" id="a-body" />
       <div id="a-editor" class="bg-white rounded-xl border border-zinc-200"></div>
     </div>
-    <button class="px-3 py-2 rounded-xl bg-zinc-900 text-white">Post answer</button>
+    <button type="submit" class="px-3 py-2 rounded-xl bg-zinc-900 text-white">Post answer</button>
   </form>
+
   <script>
-    (function () {
-      var aForm = document.currentScript.closest('form');
+    document.addEventListener('DOMContentLoaded', function () {
       var aEditor = new Quill('#a-editor', {
         theme: 'snow',
         placeholder: 'Write your answer…',
         modules: {
           toolbar: [
-            [{'header': [1, 2, 3, false]}],
-            [{'size': ['small', false, 'large', 'huge']}],
+            [{ 'header': [1, 2, 3, false] }],
+            [{ 'size': ['small', false, 'large', 'huge'] }],
             ['bold', 'italic', 'underline'],
-            [{'list': 'ordered'}, {'list': 'bullet'}],
+            [{ 'list': 'ordered' }, { 'list': 'bullet' }],
             ['blockquote', 'clean']
           ]
         }
       });
-      aForm.addEventListener('submit', function () {
-        document.getElementById('a-body').value = aEditor.root.innerHTML;
+
+      var form = document.getElementById('answer-form');
+      form.addEventListener('submit', function (e) {
+        var html = aEditor.root.innerHTML.trim();
+        if (html === '<p><br></p>' || html === '') {
+          document.getElementById('a-body').value = '';
+        } else {
+          document.getElementById('a-body').value = html;
+        }
       });
-    })();
+    });
   </script>
 </section>
 """
-
 # --- Routes ---
 @app.route("/")
 def index():
