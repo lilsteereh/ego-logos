@@ -101,6 +101,15 @@ def init_db():
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_analytics_event_time ON analytics(event_type, created_at);
+        CREATE TABLE IF NOT EXISTS analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    path TEXT,
+    ip_hash TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_event_time
+    ON analytics(event_type, created_at);
         """
     )
     db.commit()
@@ -440,7 +449,10 @@ QUESTION = """
         <div class="flex items-start">
           <div class="flex-1">
             <div class="text-sm text-zinc-600">by {{ a['name'] or 'Anonymous' }}</div>
-            <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
+            <div class="answer-body relative max-h-72 overflow-hidden" data-aid="{{ a['id'] }}" data-qid="{{ q['id'] }}">
+  <div class="prose prose-zinc max-w-none mt-1">{{ a['body'] | safe }}</div>
+  <div class="expand-overlay hidden absolute bottom-0 left-0 w-full bg-gradient-to-t from-white to-transparent text-center py-2 text-sm text-blue-600 cursor-pointer">View full answer ↓</div>
+</div>
             <div class="text-xs text-zinc-500 mt-2">{{ a['created_at'] }}</div>
           </div>
           <div class="pl-3 text-center">
@@ -465,6 +477,52 @@ QUESTION = """
       <p class="text-zinc-600">No answers yet.</p>
     {% endfor %}
   </div>
+  <script>
+document.addEventListener('DOMContentLoaded', function () {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const el = entry.target;
+        if (!el.dataset.viewed) {
+          el.dataset.viewed = 'true';
+          setTimeout(() => {
+            if (el.getBoundingClientRect().top < window.innerHeight && el.getBoundingClientRect().bottom > 0) {
+              const qid = el.dataset.qid;
+              const aid = el.dataset.aid;
+              fetch("/log_event", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({type: "view_answer", path: `/q/${qid}/a/${aid}`})
+              });
+            }
+          }, 5000);
+        }
+      }
+    });
+  }, {threshold: 0.5});
+
+  document.querySelectorAll('.answer-body').forEach(el => {
+    const content = el.querySelector('.prose');
+    const overlay = el.querySelector('.expand-overlay');
+    if (content.scrollHeight > el.clientHeight) {
+      overlay.classList.remove('hidden');
+      overlay.addEventListener('click', () => {
+        el.style.maxHeight = 'none';
+        overlay.remove();
+        const qid = el.dataset.qid;
+        const aid = el.dataset.aid;
+        fetch("/log_event", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type: "view_answer", path: `/q/${qid}/a/${aid}`})
+        });
+      });
+    } else {
+      observer.observe(el);
+    }
+  });
+});
+</script>
 </section>
 
 <section class="mt-6 bg-white p-4 rounded-2xl shadow-sm">
@@ -793,6 +851,21 @@ def suggest():
     log_event("view", request.path)
     body_html = render_template_string(SUGGEST_FORM, quill_helpers=QUILL_IMAGE_HELPERS)
     return render_template_string(BASE, body=body_html, quill_helpers=QUILL_IMAGE_HELPERS)
+
+@app.route("/log_event", methods=["POST"])
+def log_event():
+    data = request.get_json(force=True)
+    etype = data.get("type")
+    path = data.get("path")
+    if not etype:
+        return {"error": "missing type"}, 400
+    db = get_db()
+    db.execute(
+        "INSERT INTO analytics(event_type, path, ip_hash, created_at) VALUES(?,?,?,?)",
+        (etype, path, make_ip_hash(client_ip()), datetime.utcnow()),
+    )
+    db.commit()
+    return {"ok": True}
 
 @app.route("/robots.txt")
 def robots():
