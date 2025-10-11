@@ -1,9 +1,10 @@
-from flask import Flask, g, render_template, request, redirect, url_for, send_from_directory
+from flask import Blueprint, g, render_template, request, redirect, url_for, send_from_directory
 import os, sqlite3
 
 
-app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "devkey")
+# app = Flask(__name__)
+admin_bp = Blueprint('admin', __name__, template_folder='templates')
+admin_bp.secret_key = os.environ.get("SECRET_KEY", "devkey")
 
 DATABASE = "/var/data/ego.db"
 
@@ -32,25 +33,23 @@ def close_db(e=None):
     if db is not None:
         db.close()
 
-app.teardown_appcontext(close_db)
+admin_bp.teardown_appcontext(close_db)
 
 def init_db():
     db = get_db()
-    with app.open_resource('schema.sql') as f:
+    with admin_bp.open_resource('schema.sql') as f:
         db.executescript(f.read().decode('utf8'))
     db.commit()
 
-if __name__ == "__main__":
-    init_db()
 
-@app.route("/")
+@admin_bp.route("/")
 def index():
     log_event('view', request.path)
     db = get_db()
     questions = db.execute("SELECT id, title FROM questions ORDER BY id DESC").fetchall()
     return render_template("index.html", questions=questions)
 
-@app.route("/q/<int:qid>")
+@admin_bp.route("/q/<int:qid>")
 def question(qid):
     log_event('view', f"/q/{qid}")
     db = get_db()
@@ -60,7 +59,7 @@ def question(qid):
     answers = db.execute("SELECT * FROM answers WHERE question_id=? ORDER BY id DESC", (qid,)).fetchall()
     return render_template("question.html", question=q, answers=answers)
 
-@app.route("/ask", methods=["GET", "POST"])
+@admin_bp.route("/ask", methods=["GET", "POST"])
 def ask():
     if request.method == "GET":
         log_event('view', '/ask')
@@ -73,18 +72,18 @@ def ask():
         db.commit()
         qid = cursor.lastrowid
         log_event('post-question', f"/q/{qid}")
-        return redirect(url_for("question", qid=qid))
+        return redirect(url_for("admin.question", qid=qid))
 
-@app.route("/q/<int:qid>/answer", methods=["POST"])
+@admin_bp.route("/q/<int:qid>/answer", methods=["POST"])
 def answer(qid):
     body = request.form.get("body")
     db = get_db()
     db.execute("INSERT INTO answers (question_id, body) VALUES (?, ?)", (qid, body))
     db.commit()
     log_event('post-answer', f"/q/{qid}")
-    return redirect(url_for("question", qid=qid))
+    return redirect(url_for("admin.question", qid=qid))
 
-@app.route("/suggest", methods=["GET", "POST"])
+@admin_bp.route("/suggest", methods=["GET", "POST"])
 def suggest():
     if request.method == "GET":
         log_event('view', '/suggest')
@@ -95,17 +94,17 @@ def suggest():
         db.execute("INSERT INTO suggestions (body) VALUES (?)", (body,))
         db.commit()
         log_event('suggest', '/suggest')
-        return redirect(url_for("index"))
+        return redirect(url_for("admin.index"))
 
-@app.route("/vote-question/<int:qid>", methods=["POST"])
+@admin_bp.route("/vote-question/<int:qid>", methods=["POST"])
 def vote_question(qid):
     db = get_db()
     # Voting logic here (toggle vote)
     # Assuming vote added or removed successfully:
     log_event('vote-question', f"/q/{qid}")
-    return redirect(url_for("question", qid=qid))
+    return redirect(url_for("admin.question", qid=qid))
 
-@app.route("/vote-answer/<int:aid>", methods=["POST"])
+@admin_bp.route("/vote-answer/<int:aid>", methods=["POST"])
 def vote_answer(aid):
     db = get_db()
     # Get question id for answer
@@ -116,8 +115,8 @@ def vote_answer(aid):
     # Voting logic here (toggle vote)
     # Assuming vote added or removed successfully:
     log_event('vote-answer', f"/q/{qid}/a/{aid}")
-    return redirect(url_for("question", qid=qid))
+    return redirect(url_for("admin.question", qid=qid))
 
-@app.route("/uploads/<filename>")
+@admin_bp.route("/uploads/<filename>")
 def uploaded_file(filename):
     return send_from_directory("/var/data/uploads", filename)
