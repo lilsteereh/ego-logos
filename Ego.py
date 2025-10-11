@@ -127,11 +127,17 @@ BASE = """
       .prose img { max-width: 100%; height: auto; }
       /* Make inserted images in Quill editors resizable and responsive */
       .ql-editor img {
-        max-width: 100%;
+        max-width: none;
         height: auto;
         resize: both;
-        overflow: auto;
-        display: inline-block;
+        overflow: hidden;
+        display: block;
+        cursor: nwse-resize;
+        border: 1px dashed transparent;
+        transition: border-color 0.15s;
+      }
+      .ql-editor img:hover {
+        border: 1px dashed #d1d5db; /* light gray, matches Tailwind zinc-300 */
       }
     </style>
   </head>
