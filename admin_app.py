@@ -138,6 +138,13 @@ def delete_question(qid):
     db.commit()
     return redirect(url_for("admin.questions"))
 
+@admin_bp.route("/delete-answer/<int:aid>")
+def delete_answer(aid):
+    db = get_db()
+    db.execute("DELETE FROM answers WHERE id=?", (aid,))
+    db.commit()
+    return redirect(url_for("admin.answers"))
+
 @admin_bp.route("/answers")
 def answers():
     db = get_db()
@@ -166,8 +173,7 @@ def answers():
       <div class="card">
         <h2 class="text-xl font-semibold mb-3">Recent answers</h2>
         <table>
-          <thead><tr><th>ID</th><th>QID</th><th>Name</th><th>Excerpt</th><th>Created</th></tr></thead>
-          <tbody>
+<thead><tr><th>ID</th><th>QID</th><th>Name</th><th>Excerpt</th><th>Created</th><th></th></tr></thead>          <tbody>
             {% for r in rows %}
               <tr>
                 <td class="mono">{{ r.id }}</td>
@@ -175,6 +181,13 @@ def answers():
                 <td>{{ r.name or 'Anonymous' }}</td>
                 <td class="text-zinc-600">{{ r.excerpt }}</td>
                 <td class="text-zinc-500">{{ r.created_at }}</td>
+                <td>
+  <a class="text-red-600 hover:text-red-800"
+     href="{{ url_for('admin.delete_answer', aid=r['id']) }}"
+     onclick="return confirm('Delete answer #{{ r['id'] }}?')">
+    Delete
+  </a>
+</td>
               </tr>
             {% endfor %}
           </tbody>
